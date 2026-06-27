@@ -13,6 +13,7 @@ if (EXISTS ${picoVscode})
 endif()
 # ====================================================================================
 cmake_minimum_required(VERSION 3.13)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_CXX_STANDARD 17)
@@ -34,8 +35,6 @@ project(RP2350-Touch-LCD-2 C CXX ASM)
 # Initialise the Raspberry Pi Pico SDK
 pico_sdk_init()
 
-# Add executable. Default name is the project name, version 0.1
-
 # Add compilation subdirectory (searches for other CMakeLists.txt files)
 add_subdirectory(./examples)
 add_subdirectory(./lib/Config)
@@ -45,19 +44,20 @@ add_subdirectory(./lib/QMI8658)
 add_subdirectory(./lib/lvgl)
 
 # Add header file directory (where to search for header files when using #include)
-include_directories(./examples)
+include_directories(./src)
 include_directories(./lib/Config)
 include_directories(./lib/LCD)
 include_directories(./lib/Touch)
 include_directories(./lib/QMI8658)
 include_directories(./lib/lvgl)
-include_directories(./examples/inc)
+
+aux_source_directory(./src SRC)
 
 # PICO_CONFIG: PICO_XOSC_STARTUP_DELAY_MULTIPLIER, 
 # Multiplier to lengthen xosc startup delay to accommodate slow-starting oscillators, 
 # type=int, min=1, default=1, group=hardware_xosc
 
-add_executable(RP2350-Touch-LCD-2 main.c)
+add_executable(RP2350-Touch-LCD-2 main.c ${SRC})
 
 pico_set_program_name(RP2350-Touch-LCD-2 "RP2350-Touch-LCD-2")
 pico_set_program_version(RP2350-Touch-LCD-2 "0.1")

@@ -1,7 +1,6 @@
-#include <stdio.h>
 #include "LCD_2in.h"
 #include "CST816D.h"
-#include "QMI8658.h"
+// #include "QMI8658.h"
 #include "init.h"
 
 int main (void) {

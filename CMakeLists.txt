@@ -36,7 +36,6 @@ project(RP2350-Touch-LCD-2 C CXX ASM)
 pico_sdk_init()
 
 # Add compilation subdirectory (searches for other CMakeLists.txt files)
-add_subdirectory(./examples)
 add_subdirectory(./lib/Config)
 add_subdirectory(./lib/LCD)
 add_subdirectory(./lib/Touch)
@@ -80,11 +79,12 @@ target_link_libraries(  RP2350-Touch-LCD-2
                         QMI8658
                         LVGL
                         Config
-                        examples
                         pico_stdlib
                         hardware_spi
                         hardware_i2c
                         hardware_dma
+                        tinyusb_device
+                        tinyusb_board
 )
 
 # Add the standard include files to the build

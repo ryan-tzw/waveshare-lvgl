@@ -1,4 +1,8 @@
 #include "init.h"
+#include "src/core/lv_event.h"
+#include "src/misc/lv_style.h"
+#include <stdint.h>
+#include <string.h>
 
 // LVGL
 static lv_disp_drv_t disp_drv;
@@ -7,9 +11,15 @@ static lv_color_t buf0[DISP_HOR_RES * DISP_VER_RES/2];
 static lv_color_t buf1[DISP_HOR_RES * DISP_VER_RES/2];
 
 static lv_obj_t *tileview;
+static lv_obj_t *tile0;
 static lv_obj_t *tile1;
+static lv_obj_t *tile2;
 
 static lv_obj_t *label;
+static lv_obj_t *btn_counter_label;
+static lv_obj_t *btn_counter;
+
+static uint16_t counter = 0;
 
 // Touch
 static uint16_t ts_x;
@@ -27,6 +37,8 @@ static void touch_read_cb(lv_indev_drv_t *drv, lv_indev_data_t *data);
 static void dma_handler(void);
 static void scroll_begin_event_cb(lv_event_t *event);
 static bool repeating_lvgl_timer_cb(struct repeating_timer *t); 
+static void button_event_cb(lv_event_t *event);
+
 
 void init_lvgl(void) {
     /* 1. Init Timer */ 
@@ -59,33 +71,33 @@ void init_lvgl(void) {
 }
 
 void init_widgets(void) {
-    /* Style Config */
-    static lv_style_t style_indic;
-    lv_style_init(&style_indic);
-    lv_style_set_bg_color(&style_indic, lv_palette_lighten(LV_PALETTE_DEEP_ORANGE, 3));
-    lv_style_set_bg_grad_color(&style_indic, lv_palette_main(LV_PALETTE_DEEP_ORANGE));
-    lv_style_set_bg_grad_dir(&style_indic, LV_GRAD_DIR_HOR);
-
-    static lv_style_t style_indic_pr;
-    lv_style_init(&style_indic_pr);
-    lv_style_set_shadow_color(&style_indic_pr, lv_palette_main(LV_PALETTE_DEEP_ORANGE));
-    lv_style_set_shadow_width(&style_indic_pr, 10);
-    lv_style_set_shadow_spread(&style_indic_pr, 3);
-
+    // Styles
     static lv_style_t style_label;
     lv_style_init(&style_label);
     lv_style_set_text_font(&style_label, &lv_font_montserrat_24);
+    lv_style_set_pad_all(&style_label, 24);
 
-    /* Create tileview */
+    // Create tileview and tiles
     tileview = lv_tileview_create(lv_scr_act());
-    lv_obj_set_scrollbar_mode(tileview,  LV_SCROLLBAR_MODE_OFF);
+    lv_obj_set_scrollbar_mode(tileview,  LV_SCROLLBAR_MODE_ON);
+    tile0 = lv_tileview_add_tile(tileview, 0, 0, LV_DIR_BOTTOM);
+    tile1 = lv_tileview_add_tile(tileview, 0, 1, LV_DIR_TOP|LV_DIR_BOTTOM);
+    tile2 = lv_tileview_add_tile(tileview, 0, 2, LV_DIR_TOP);
 
-    tile1 = lv_tileview_add_tile(tileview, 0, 0, LV_DIR_BOTTOM);
-
-    label = lv_label_create(tile1);
+    // Widgets
+    label = lv_label_create(tile0);
     lv_label_set_text(label, "Hello");
     lv_obj_align(label, LV_ALIGN_CENTER, 0, 0);
     lv_obj_add_style(label, &style_label, 0);
+
+    btn_counter = lv_btn_create(tile1);
+    lv_obj_add_event_cb(btn_counter, button_event_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_align(btn_counter, LV_ALIGN_CENTER, 0, 0);
+
+    btn_counter_label = lv_label_create(btn_counter);
+    lv_label_set_text(btn_counter_label, "Count: 0");
+    lv_obj_center(btn_counter_label);
+    lv_obj_add_style(btn_counter_label, &style_label, 0);
 }
 
 /* Disable scroll animations when a tab button is clicked in a tabview*/
@@ -158,4 +170,17 @@ static bool update_check(lv_obj_t *tv,lv_obj_t *tilex) {
 static bool repeating_lvgl_timer_cb(struct repeating_timer *t) {
     lv_tick_inc(5);
     return true;
+}
+
+static void button_event_cb(lv_event_t *event) {
+    counter++;
+    printf("Button pressed: %d\n", counter);
+
+    char buf[12] = "Count: ";
+    size_t len = strlen(buf);
+    snprintf(buf + len, sizeof(buf) - len, "%d", counter);
+
+    lv_label_set_text(btn_counter_label, buf);
+
+    // todo: send data over webusb
 }

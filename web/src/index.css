@@ -1,3 +1,8 @@
+/*
+    this is the default styling that came out of vite
+    so we might want to change this later idk im just leaving it for now
+*/
+
 :root {
     --text: #6b6375;
     --text-h: #08060d;
@@ -106,4 +111,60 @@ code {
     line-height: 135%;
     padding: 4px 8px;
     background: var(--code-bg);
+}
+
+/* i gave gpt the above styles and asked it to generate styles for input to match which is everything below */
+
+input,
+textarea,
+select {
+    font: inherit;
+    letter-spacing: inherit;
+    color: var(--text-h);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    outline: none;
+    box-sizing: border-box;
+    transition:
+        border-color 160ms ease,
+        box-shadow 160ms ease,
+        background 160ms ease;
+}
+
+input::placeholder,
+textarea::placeholder {
+    color: var(--text);
+    opacity: 0.65;
+}
+
+input:hover,
+textarea:hover,
+select:hover {
+    border-color: var(--accent-border);
+}
+
+input:focus,
+textarea:focus,
+select:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 4px var(--accent-bg);
+}
+
+input:disabled,
+textarea:disabled,
+select:disabled {
+    cursor: not-allowed;
+    opacity: 0.6;
+    background: var(--social-bg);
+}
+
+textarea {
+    min-height: 120px;
+    resize: vertical;
+}
+
+input[type="search"] {
+    appearance: none;
 }

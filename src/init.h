@@ -7,7 +7,6 @@
 #include "DEV_Config.h"
 #include "LCD_2in.h"
 #include "CST816D.h"
-#include "QMI8658.h"
 #include "lvgl.h"
 
 #define DISP_HOR_RES 240
@@ -15,6 +14,7 @@
 
 void init_lvgl(void);
 void init_widgets(void);
+void write_to_label(const char buf[], uint32_t count);
 
 
 #endif

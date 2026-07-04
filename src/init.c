@@ -1,6 +1,4 @@
 #include "init.h"
-#include "src/core/lv_event.h"
-#include "src/misc/lv_style.h"
 #include <stdint.h>
 #include <string.h>
 
@@ -16,8 +14,9 @@ static lv_obj_t *tile1;
 static lv_obj_t *tile2;
 
 static lv_obj_t *label;
-static lv_obj_t *btn_counter_label;
 static lv_obj_t *btn_counter;
+static lv_obj_t *btn_counter_label;
+static lv_obj_t *writable_label;
 
 static uint16_t counter = 0;
 
@@ -84,12 +83,16 @@ void init_widgets(void) {
     tile1 = lv_tileview_add_tile(tileview, 0, 1, LV_DIR_TOP|LV_DIR_BOTTOM);
     tile2 = lv_tileview_add_tile(tileview, 0, 2, LV_DIR_TOP);
 
-    // Widgets
+    /*
+        Widgets
+    */
+    // Tile 0
     label = lv_label_create(tile0);
     lv_label_set_text(label, "Hello");
     lv_obj_align(label, LV_ALIGN_CENTER, 0, 0);
     lv_obj_add_style(label, &style_label, 0);
 
+    // Tile 1
     btn_counter = lv_btn_create(tile1);
     lv_obj_add_event_cb(btn_counter, button_event_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_align(btn_counter, LV_ALIGN_CENTER, 0, 0);
@@ -98,6 +101,11 @@ void init_widgets(void) {
     lv_label_set_text(btn_counter_label, "Count: 0");
     lv_obj_center(btn_counter_label);
     lv_obj_add_style(btn_counter_label, &style_label, 0);
+
+    // Tile 2
+    writable_label = lv_label_create(tile2);
+    lv_obj_center(writable_label);
+    lv_obj_add_style(writable_label, &style_label, 0);
 }
 
 /* Disable scroll animations when a tab button is clicked in a tabview*/
@@ -181,6 +189,12 @@ static void button_event_cb(lv_event_t *event) {
     snprintf(buf + len, sizeof(buf) - len, "%d", counter);
 
     lv_label_set_text(btn_counter_label, buf);
+}
 
-    // todo: send data over webusb
+void write_to_label(const char buf[], uint32_t count) {
+    char local_buf[65];
+    memcpy(local_buf, buf, count);
+    local_buf[count] = '\0';
+
+    lv_label_set_text(writable_label, local_buf);
 }

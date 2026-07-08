@@ -98,8 +98,7 @@ p {
     margin: 0;
 }
 
-code,
-.counter {
+code {
     font-family: var(--mono);
     display: inline-flex;
     border-radius: 4px;
@@ -111,6 +110,34 @@ code {
     line-height: 135%;
     padding: 4px 8px;
     background: var(--code-bg);
+}
+
+button {
+    font-size: 16px;
+    padding: 5px 10px;
+    border-radius: 5px;
+    color: var(--accent);
+    background: var(--accent-bg);
+    border: 2px solid transparent;
+    transition: border-color 0.2s;
+    margin-bottom: 24px;
+
+    &:hover {
+        border-color: var(--accent-border);
+    }
+    &:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 2px;
+    }
+    &:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+        border-color: transparent;
+    }
+
+    &:disabled:hover {
+        border-color: transparent;
+    }
 }
 
 /* i gave gpt the above styles and asked it to generate styles for input to match which is everything below */

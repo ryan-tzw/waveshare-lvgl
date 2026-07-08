@@ -1,5 +1,5 @@
 import "./App.css";
-import ConnectButton from "./ConnectButton";
+import { ConnectButton } from "./ConnectButton";
 
 function App() {
     return (
@@ -7,7 +7,6 @@ function App() {
             <section id="center">
                 <h1>🦆🦆🦆</h1>
                 <ConnectButton />
-                <input id="test" />
             </section>
         </>
     );

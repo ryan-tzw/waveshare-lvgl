@@ -1,7 +1,8 @@
 import { useRef, useState } from "react";
 
-const isWebSerialSupported = () => "serial" in navigator;
+const isWebSerialSupported = "serial" in navigator;
 const usbVendorId = 0xcafe;
+const encoder = new TextEncoder();
 
 export function useSerial() {
     // serial stuff won't trigger rerenders
@@ -28,11 +29,11 @@ export function useSerial() {
 
             setConnected(true);
             keepReadingRef.current = true;
+
+            closedPromiseRef.current = loop();
         } catch (err) {
             console.error(err);
         }
-
-        closedPromiseRef.current = loop();
     }
 
     async function loop() {
@@ -62,6 +63,25 @@ export function useSerial() {
         await portRef.current.close();
     }
 
+    function send(input: string) {
+        if (!portRef.current || !portRef.current.writable) {
+            console.error("send(): Serial port unavailable or port not writable");
+            return;
+        }
+
+        const writer = portRef.current.writable.getWriter();
+        if (!writer) {
+            console.error("send(): Failed to get writer");
+            return;
+        }
+
+        try {
+            writer.write(encoder.encode(input));
+        } finally {
+            writer.releaseLock();
+        }
+    }
+
     async function disconnect() {
         if (!portRef.current) {
             console.error("disconnect(): Serial port unavailable");
@@ -71,6 +91,10 @@ export function useSerial() {
         keepReadingRef.current = false;
         readerRef.current?.cancel();
         await closedPromiseRef.current;
+
+        closedPromiseRef.current = null;
+        readerRef.current = null;
+
         setConnected(false);
     }
 
@@ -78,5 +102,6 @@ export function useSerial() {
         connected,
         connect,
         disconnect,
+        send,
     };
 }

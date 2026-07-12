@@ -1,4 +1,5 @@
 #include "init.h"
+#include "init_widgets.h"
 #include "tusb.h"
 #include "usb_descriptors.h"
 

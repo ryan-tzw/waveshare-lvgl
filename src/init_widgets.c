@@ -138,9 +138,6 @@ static void carousel_cb(lv_event_t *event) {
     lv_obj_t *carousel = lv_event_get_current_target(event);
 
     if (target == carousel) return;
-
-    uint32_t index = lv_obj_get_index(target);
-    
     if (target == selected_button) {
         lv_obj_clear_state(target, LV_STATE_CHECKED);
         selected_button = NULL;

@@ -42,6 +42,14 @@ add_subdirectory(./lib/LCD)
 add_subdirectory(./lib/Touch)
 add_subdirectory(./lib/QMI8658)
 add_subdirectory(./lib/lvgl)
+add_subdirectory(./lib/core1_task_queue)
+add_subdirectory(./lib/nanopb)
+add_subdirectory(./proto)
+add_subdirectory(./lib/pio)
+add_subdirectory(./lib/cobs)
+add_subdirectory(./lib/crc16)
+add_subdirectory(./lib/socket)
+add_subdirectory(./lib/simulator_engine)
 
 # Add header file directory (where to search for header files when using #include)
 include_directories(./src)
@@ -81,10 +89,12 @@ target_link_libraries(  RP2350-Touch-LCD-2
                         LVGL
                         Config
                         examples
+                        core1_task_queue
                         pico_stdlib
                         hardware_spi
                         hardware_i2c
                         hardware_dma
+                        simulator_engine
 )
 
 # Add the standard include files to the build

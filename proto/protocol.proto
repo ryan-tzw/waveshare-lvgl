@@ -1,0 +1,21 @@
+syntax = "proto3";
+
+import "nanopb.proto";
+
+package device.protocol;
+
+message ApplicationLayerPacket {
+    enum Component {
+        BATTERY = 0;
+        BULB = 1;
+    }
+
+    Component component = 1;
+}
+
+message TCPSegment {
+    ApplicationLayerPacket application_layer_packet = 1;
+    uint32 sequence = 2;
+    bool ack = 3;
+    uint32 ack_sequence = 4;
+}

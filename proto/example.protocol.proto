@@ -1,0 +1,68 @@
+syntax = "proto3";
+
+package device.protocol;
+
+// Device status message sent from embedded device
+message DeviceStatus {
+  uint32 device_id = 1;
+  uint32 firmware_version = 2;
+
+  // Temperature in 0.01 degree Celsius
+  int32 temperature_centi = 3;
+
+  // Battery level in percentage (0-100)
+  uint32 battery_percent = 4;
+
+  // Device state
+  enum State {
+    UNKNOWN = 0;
+    IDLE = 1;
+    RUNNING = 2;
+    ERROR = 3;
+  }
+
+  State state = 5;
+
+  // Error code if state == ERROR
+  uint32 error_code = 6;
+
+  // Unix timestamp
+  uint32 timestamp = 7;
+}
+
+
+// Command sent to device
+message DeviceCommand {
+  uint32 command_id = 1;
+
+  enum CommandType {
+    NONE = 0;
+    START = 1;
+    STOP = 2;
+    RESET = 3;
+    SET_CONFIG = 4;
+  }
+
+  CommandType type = 2;
+
+  DeviceConfig config = 3;
+}
+
+
+// Configuration parameters
+message DeviceConfig {
+  uint32 sample_period_ms = 1;
+  uint32 threshold = 2;
+  bool enable_logging = 3;
+}
+
+
+// Generic packet wrapper
+message Packet {
+  uint32 sequence = 1;
+
+  oneof payload {
+    DeviceStatus status = 2;
+    DeviceCommand command = 3;
+  }
+}

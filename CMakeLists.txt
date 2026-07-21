@@ -44,6 +44,7 @@ add_subdirectory(./lib/lvgl)
 
 # Add header file directory (where to search for header files when using #include)
 include_directories(./src)
+include_directories(./src/usb)
 include_directories(./lib/Config)
 include_directories(./lib/LCD)
 include_directories(./lib/Touch)
@@ -52,12 +53,13 @@ include_directories(./lib/lvgl)
 
 aux_source_directory(./src SRC)
 aux_source_directory(./src/assets ASSETS)
+aux_source_directory(./src/usb USB)
 
 # PICO_CONFIG: PICO_XOSC_STARTUP_DELAY_MULTIPLIER, 
 # Multiplier to lengthen xosc startup delay to accommodate slow-starting oscillators, 
 # type=int, min=1, default=1, group=hardware_xosc
 
-add_executable(RP2350-Touch-LCD-2 main.c ${SRC} ${ASSETS})
+add_executable(RP2350-Touch-LCD-2 main.c ${SRC} ${ASSETS} ${USB})
 
 pico_set_program_name(RP2350-Touch-LCD-2 "RP2350-Touch-LCD-2")
 pico_set_program_version(RP2350-Touch-LCD-2 "0.1")

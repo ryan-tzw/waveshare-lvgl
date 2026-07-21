@@ -41,6 +41,7 @@ add_subdirectory(./lib/LCD)
 add_subdirectory(./lib/Touch)
 add_subdirectory(./lib/QMI8658)
 add_subdirectory(./lib/lvgl)
+add_subdirectory(./submodules)
 
 # Add header file directory (where to search for header files when using #include)
 include_directories(./src)
@@ -88,6 +89,11 @@ target_link_libraries(  RP2350-Touch-LCD-2
                         hardware_dma
                         tinyusb_device
                         tinyusb_board
+
+                        cobs
+                        libcrc
+                        protobuf-nanopb-static
+
 )
 
 # Add the standard include files to the build

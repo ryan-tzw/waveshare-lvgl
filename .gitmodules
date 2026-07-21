@@ -1,0 +1,9 @@
+[submodule "submodules/cobs-c"]
+	path = submodules/cobs-c
+	url = https://github.com/cmcqueen/cobs-c.git
+[submodule "submodules/nanopb"]
+	path = submodules/nanopb
+	url = https://github.com/nanopb/nanopb
+[submodule "submodules/libcrc"]
+	path = submodules/libcrc
+	url = https://github.com/lammertb/libcrc

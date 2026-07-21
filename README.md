@@ -1,5 +1,9 @@
 ## Getting Started
 
+```
+git clone --recurse-submodules https://github.com/ryan-tzw/waveshare-lvgl
+```
+
 ### Embedded
 
 1. Install the [Raspberry Pi Pico](https://marketplace.visualstudio.com/items?itemName=raspberry-pi.raspberry-pi-pico) extension for VS Code

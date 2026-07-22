@@ -62,6 +62,8 @@ aux_source_directory(./src/usb USB)
 
 add_executable(RP2350-Touch-LCD-2 main.c ${SRC} ${ASSETS} ${USB})
 
+add_subdirectory(./src/pio_uart)
+
 pico_set_program_name(RP2350-Touch-LCD-2 "RP2350-Touch-LCD-2")
 pico_set_program_version(RP2350-Touch-LCD-2 "0.1")
 
@@ -87,6 +89,7 @@ target_link_libraries(  RP2350-Touch-LCD-2
                         hardware_spi
                         hardware_i2c
                         hardware_dma
+                        hardware_pio
                         tinyusb_device
                         tinyusb_board
 

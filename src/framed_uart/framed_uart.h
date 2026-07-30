@@ -7,13 +7,17 @@
 #include "pio_uart.h"
 
 #define FRAMED_UART_MAX_PAYLOAD_SIZE 240
-#define FRAMED_UART_MAX_ENCODED_SIZE 241
-#define FRAMED_UART_MAX_FRAME_SIZE 242
+#define FRAMED_UART_CRC_SIZE 2
+#define FRAMED_UART_MAX_DATA_SIZE (FRAMED_UART_MAX_PAYLOAD_SIZE + FRAMED_UART_CRC_SIZE)
+#define FRAMED_UART_MAX_ENCODED_SIZE (FRAMED_UART_MAX_DATA_SIZE + 1)
+#define FRAMED_UART_MAX_FRAME_SIZE (FRAMED_UART_MAX_ENCODED_SIZE + 1)
 
 typedef struct {
     PioUart *uart;
+    uint8_t tx_data_buffer[FRAMED_UART_MAX_DATA_SIZE];
     uint8_t tx_buffer[FRAMED_UART_MAX_FRAME_SIZE];
     uint8_t rx_buffer[FRAMED_UART_MAX_ENCODED_SIZE];
+    uint8_t rx_data_buffer[FRAMED_UART_MAX_DATA_SIZE];
     size_t rx_length;
     bool discarding_frame;
     bool initialized;

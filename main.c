@@ -1,7 +1,12 @@
 #include "init.h"
 #include "init_widgets.h"
+#include "pio_uart.h"
 #include "tusb.h"
 #include "usb_descriptors.h"
+
+#define PIO_UART_TX_PIN 4
+#define PIO_UART_RX_PIN 5
+#define PIO_UART_BAUD 115200
 
 // #define URL "localhost:8080"
 // const tusb_desc_webusb_url_t desc_url = {
@@ -12,9 +17,18 @@
 // };
 
 static bool web_usb_connected = false;
+static PioUart test_uart = {0};
 
 int main (void) {
     if (DEV_Module_Init() != 0) { return -1; } 
+    hard_assert(
+        pio_uart_init(
+            &test_uart,
+            PIO_UART_TX_PIN,
+            PIO_UART_RX_PIN,
+            PIO_UART_BAUD
+        )
+    );
 
     /* Init LCD */
     Scan_dir = VERTICAL;
@@ -30,7 +44,7 @@ int main (void) {
 
     /* Init LVGL */
     init_lvgl();
-    init_widgets();
+    init_widgets(&test_uart);
 
     tusb_rhport_init_t dev_init = {
         .role = TUSB_ROLE_DEVICE,
@@ -39,6 +53,11 @@ int main (void) {
     tusb_init(BOARD_TUD_RHPORT, &dev_init);
 
     while (1) {
+        uint8_t byte;
+        while (pio_uart_try_read(&test_uart, &byte)) {
+            putchar(byte);
+        }
+
         tud_task(); // tinyusb device task
         tud_cdc_write_flush();
         lv_task_handler();

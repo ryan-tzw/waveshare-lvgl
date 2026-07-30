@@ -1,7 +1,6 @@
 #include "init_widgets.h"
 #include <stdint.h>
 #include <string.h>
-#include <stdio.h>
 
 // tileview
 static lv_obj_t *tileview;
@@ -10,11 +9,8 @@ static lv_obj_t *tile01;
 static lv_obj_t *tile02;
 
 // widgets
-static lv_obj_t *btn_counter;
-static lv_obj_t *btn_counter_label;
+static lv_obj_t *btn_uart_test;
 static lv_obj_t *writable_label;
-
-static uint16_t counter = 0;
 
 // carousel stuff
 typedef struct {
@@ -36,9 +32,9 @@ static lv_obj_t *selected_button = NULL;
 
 // callbacks
 static void carousel_cb(lv_event_t *event);
-static void btn_counter_cb(lv_event_t *event);
+static void btn_uart_test_cb(lv_event_t *event);
 
-void init_widgets(void) {
+void init_widgets(PioUart *test_uart) {
     // Create tileview and tiles
     tileview = lv_tileview_create(lv_scr_act());
     lv_obj_set_scrollbar_mode(tileview,  LV_SCROLLBAR_MODE_ON);
@@ -115,14 +111,19 @@ void init_widgets(void) {
         Row 1
     */
     // Tile 01
-    btn_counter = lv_btn_create(tile01);
-    lv_obj_add_event_cb(btn_counter, btn_counter_cb, LV_EVENT_CLICKED, NULL);
-    lv_obj_align(btn_counter, LV_ALIGN_CENTER, 0, 0);
+    btn_uart_test = lv_btn_create(tile01);
+    lv_obj_add_event_cb(
+        btn_uart_test,
+        btn_uart_test_cb,
+        LV_EVENT_CLICKED,
+        test_uart
+    );
+    lv_obj_align(btn_uart_test, LV_ALIGN_CENTER, 0, 0);
 
-    btn_counter_label = lv_label_create(btn_counter);
-    lv_label_set_text(btn_counter_label, "Count: 0");
-    lv_obj_center(btn_counter_label);
-    lv_obj_add_style(btn_counter_label, &style_label, 0);
+    lv_obj_t *btn_uart_test_label = lv_label_create(btn_uart_test);
+    lv_label_set_text(btn_uart_test_label, "PIO UART test");
+    lv_obj_center(btn_uart_test_label);
+    lv_obj_add_style(btn_uart_test_label, &style_label, 0);
 
     /*
         Row 2
@@ -151,15 +152,11 @@ static void carousel_cb(lv_event_t *event) {
     lv_obj_add_state(target, LV_STATE_CHECKED);
 }
 
-static void btn_counter_cb(lv_event_t *event) {
-    counter++;
-    printf("Button pressed: %d\n", counter);
+static void btn_uart_test_cb(lv_event_t *event) {
+    static const uint8_t message[] = "PIO UART test\n";
+    PioUart *uart = lv_event_get_user_data(event);
 
-    char buf[12] = "Count: ";
-    size_t len = strlen(buf);
-    snprintf(buf + len, sizeof(buf) - len, "%d", counter);
-
-    lv_label_set_text(btn_counter_label, buf);
+    pio_uart_write(uart, message, sizeof(message) - 1);
 }
 
 void write_to_label(const char buf[], uint32_t count) {

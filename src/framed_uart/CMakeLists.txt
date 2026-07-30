@@ -1,0 +1,7 @@
+target_sources(RP2350-Touch-LCD-2 PRIVATE
+    ${CMAKE_CURRENT_LIST_DIR}/framed_uart.c
+)
+
+target_include_directories(RP2350-Touch-LCD-2 PRIVATE
+    ${CMAKE_CURRENT_LIST_DIR}
+)

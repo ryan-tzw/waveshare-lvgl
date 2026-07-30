@@ -1,5 +1,6 @@
 #include "init.h"
 #include "init_widgets.h"
+#include "framed_uart.h"
 #include "pio_uart.h"
 #include "tusb.h"
 #include "usb_descriptors.h"
@@ -18,6 +19,7 @@
 
 static bool web_usb_connected = false;
 static PioUart test_uart = {0};
+static FramedUart test_framed_uart = {0};
 
 int main (void) {
     if (DEV_Module_Init() != 0) { return -1; } 
@@ -29,6 +31,7 @@ int main (void) {
             PIO_UART_BAUD
         )
     );
+    hard_assert(framed_uart_init(&test_framed_uart, &test_uart));
 
     /* Init LCD */
     Scan_dir = VERTICAL;
@@ -44,7 +47,7 @@ int main (void) {
 
     /* Init LVGL */
     init_lvgl();
-    init_widgets(&test_uart);
+    init_widgets(&test_framed_uart);
 
     tusb_rhport_init_t dev_init = {
         .role = TUSB_ROLE_DEVICE,
@@ -52,10 +55,19 @@ int main (void) {
     };
     tusb_init(BOARD_TUD_RHPORT, &dev_init);
 
+    uint8_t payload[FRAMED_UART_MAX_PAYLOAD_SIZE];
+    size_t payload_length;
+
     while (1) {
-        uint8_t byte;
-        while (pio_uart_try_read(&test_uart, &byte)) {
-            putchar(byte);
+        while (framed_uart_try_receive(
+            &test_framed_uart,
+            payload,
+            sizeof(payload),
+            &payload_length
+        )) {
+            for (size_t i = 0; i < payload_length; i++) {
+                putchar(payload[i]);
+            }
         }
 
         tud_task(); // tinyusb device task

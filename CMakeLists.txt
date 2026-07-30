@@ -63,6 +63,7 @@ aux_source_directory(./src/usb USB)
 add_executable(RP2350-Touch-LCD-2 main.c ${SRC} ${ASSETS} ${USB})
 
 add_subdirectory(./src/pio_uart)
+add_subdirectory(./src/framed_uart)
 
 pico_set_program_name(RP2350-Touch-LCD-2 "RP2350-Touch-LCD-2")
 pico_set_program_version(RP2350-Touch-LCD-2 "0.1")
@@ -105,4 +106,3 @@ target_include_directories(RP2350-Touch-LCD-2 PRIVATE
 )
 
 pico_add_extra_outputs(RP2350-Touch-LCD-2)
-

@@ -16,6 +16,7 @@
 #define PIO_UART_RX_PIN 5
 #define PIO_UART_BAUD 115200
 #define PIO_UART_PORT 0
+#define PIO_UART_PORT_COUNT 4
 #define HELLO_INTERVAL_MS 1000
 #define TIMING_REPORT_INTERVAL_MS 1000
 
@@ -27,10 +28,19 @@
 //     .url             = URL
 // };
 
+typedef struct {
+    bool observed;
+    uint8_t node_id[PICO_UNIQUE_BOARD_ID_SIZE_BYTES];
+    uint32_t boot_id;
+    uint32_t remote_port;
+    uint32_t sequence;
+} Neighbor;
+
 static bool web_usb_connected = false;
 static PioUart test_uart = {0};
 static FramedUart test_framed_uart = {0};
 static NodeIdentity node_identity = {0};
+static Neighbor neighbors[PIO_UART_PORT_COUNT] = {0};
 static const bool timing_output_enabled = false;
 
 static void send_hello(
@@ -74,7 +84,31 @@ static void send_hello(
     }
 }
 
-static void handle_received_packet(const uint8_t *data, size_t length) {
+static void print_neighbor(
+    const char *event,
+    const Neighbor *neighbor,
+    uint32_t local_port
+) {
+    printf("%s\n", event);
+    printf("Local port: %lu\n", (unsigned long)local_port);
+
+    printf("Node ID: ");
+    for (size_t i = 0; i < sizeof(neighbor->node_id); i++) {
+        unsigned int node_id_byte = neighbor->node_id[i];
+        printf("%02x", node_id_byte);
+    }
+
+    printf("\nBoot ID: %08lx\n", (unsigned long)neighbor->boot_id);
+    printf("Remote port: %lu\n", (unsigned long)neighbor->remote_port);
+    printf("Sequence: %lu\n", (unsigned long)neighbor->sequence);
+}
+
+static void handle_received_packet(
+    const uint8_t *data,
+    size_t length,
+    uint32_t local_port,
+    Neighbor *neighbor
+) {
     NetworkPacket packet = NetworkPacket_init_zero;
     pb_istream_t stream = pb_istream_from_buffer(data, length);
 
@@ -89,19 +123,37 @@ static void handle_received_packet(const uint8_t *data, size_t length) {
         return;
     }
 
-    printf("Received HELLO\n");
-    printf("Node ID: ");
-    for (size_t i = 0; i < sizeof(packet.source_node_id); i++) {
-        unsigned int node_id_byte = packet.source_node_id[i];
-        printf("%02x", node_id_byte);
+    const char *neighbor_event = NULL;
+
+    if (!neighbor->observed) {
+        neighbor_event = "Neighbor discovered";
+    } else if (memcmp(
+            neighbor->node_id,
+            packet.source_node_id,
+            sizeof(neighbor->node_id)
+        ) != 0) {
+        neighbor_event = "Neighbor replaced";
+    } else if (neighbor->boot_id != packet.boot_id) {
+        neighbor_event = "Neighbor restarted";
+    } else if (
+        neighbor->remote_port != packet.payload.hello.sender_port
+    ) {
+        neighbor_event = "Neighbor port changed";
     }
 
-    printf("\nBoot ID: %08lx\n", (unsigned long)packet.boot_id);
-    printf("Sequence: %lu\n", (unsigned long)packet.sequence);
-    printf(
-        "Sender port: %lu\n",
-        (unsigned long)packet.payload.hello.sender_port
+    memcpy(
+        neighbor->node_id,
+        packet.source_node_id,
+        sizeof(neighbor->node_id)
     );
+    neighbor->boot_id = packet.boot_id;
+    neighbor->remote_port = packet.payload.hello.sender_port;
+    neighbor->sequence = packet.sequence;
+    neighbor->observed = true;
+
+    if (neighbor_event != NULL) {
+        print_neighbor(neighbor_event, neighbor, local_port);
+    }
 }
 
 int main (void) {
@@ -176,7 +228,12 @@ int main (void) {
             &payload_length
         )) {
             uint64_t packet_start_time_us = time_us_64();
-            handle_received_packet(payload, payload_length);
+            handle_received_packet(
+                payload,
+                payload_length,
+                PIO_UART_PORT,
+                &neighbors[PIO_UART_PORT]
+            );
             uint64_t packet_elapsed_time_us =
                 time_us_64() - packet_start_time_us;
             if (timing_output_enabled) {

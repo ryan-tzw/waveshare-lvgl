@@ -11,6 +11,7 @@ static lv_obj_t *tile02;
 // widgets
 static lv_obj_t *btn_uart_test;
 static lv_obj_t *writable_label;
+static bool uart_test_send_requested = false;
 
 // carousel stuff
 typedef struct {
@@ -34,7 +35,7 @@ static lv_obj_t *selected_button = NULL;
 static void carousel_cb(lv_event_t *event);
 static void btn_uart_test_cb(lv_event_t *event);
 
-void init_widgets(FramedUart *framed_uart) {
+void init_widgets(void) {
     // Create tileview and tiles
     tileview = lv_tileview_create(lv_scr_act());
     lv_obj_set_scrollbar_mode(tileview,  LV_SCROLLBAR_MODE_ON);
@@ -116,7 +117,7 @@ void init_widgets(FramedUart *framed_uart) {
         btn_uart_test,
         btn_uart_test_cb,
         LV_EVENT_CLICKED,
-        framed_uart
+        NULL
     );
     lv_obj_align(btn_uart_test, LV_ALIGN_CENTER, 0, 0);
 
@@ -153,10 +154,14 @@ static void carousel_cb(lv_event_t *event) {
 }
 
 static void btn_uart_test_cb(lv_event_t *event) {
-    static const uint8_t message[] = "PIO UART test\n";
-    FramedUart *framed_uart = lv_event_get_user_data(event);
+    uart_test_send_requested = true;
+}
 
-    hard_assert(framed_uart_send(framed_uart, message, sizeof(message) - 1));
+bool take_uart_test_send_request(void) {
+    bool send_requested = uart_test_send_requested;
+    uart_test_send_requested = false;
+
+    return send_requested;
 }
 
 void write_to_label(const char buf[], uint32_t count) {

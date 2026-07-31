@@ -22,6 +22,7 @@ static bool web_usb_connected = false;
 static PioUart test_uart = {0};
 static FramedUart test_framed_uart = {0};
 static NodeIdentity node_identity = {0};
+static const uint8_t uart_test_message[] = "PIO UART test\n";
 
 static void print_node_identity(NodeIdentity *identity) {
     uint32_t sequence = node_identity_next_sequence(identity);
@@ -63,7 +64,7 @@ int main (void) {
 
     /* Init LVGL */
     init_lvgl();
-    init_widgets(&test_framed_uart);
+    init_widgets();
 
     tusb_rhport_init_t dev_init = {
         .role = TUSB_ROLE_DEVICE,
@@ -75,6 +76,14 @@ int main (void) {
     size_t payload_length;
 
     while (1) {
+        if (take_uart_test_send_request()) {
+            hard_assert(framed_uart_send(
+                &test_framed_uart,
+                uart_test_message,
+                sizeof(uart_test_message) - 1
+            ));
+        }
+
         while (framed_uart_try_receive(
             &test_framed_uart,
             payload,

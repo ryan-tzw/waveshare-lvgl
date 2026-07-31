@@ -17,6 +17,7 @@
 #define PIO_UART_BAUD 115200
 #define PIO_UART_PORT 0
 #define HELLO_INTERVAL_MS 1000
+#define TIMING_REPORT_INTERVAL_MS 1000
 
 // #define URL "localhost:8080"
 // const tusb_desc_webusb_url_t desc_url = {
@@ -30,12 +31,15 @@ static bool web_usb_connected = false;
 static PioUart test_uart = {0};
 static FramedUart test_framed_uart = {0};
 static NodeIdentity node_identity = {0};
+static const bool timing_output_enabled = false;
 
 static void send_hello(
     FramedUart *framed_uart,
     NodeIdentity *identity,
     uint32_t sender_port
 ) {
+    uint64_t start_time_us = time_us_64();
+
     NetworkPacket packet = NetworkPacket_init_zero;
     memcpy(
         packet.source_node_id,
@@ -60,6 +64,14 @@ static void send_hello(
         encoded_packet,
         stream.bytes_written
     ));
+
+    uint64_t elapsed_time_us = time_us_64() - start_time_us;
+    if (timing_output_enabled) {
+        printf(
+            "HELLO send: %llu us\n",
+            (unsigned long long)elapsed_time_us
+        );
+    }
 }
 
 static void handle_received_packet(const uint8_t *data, size_t length) {
@@ -131,6 +143,14 @@ int main (void) {
     uint8_t payload[FRAMED_UART_MAX_PAYLOAD_SIZE];
     size_t payload_length;
 
+    absolute_time_t next_timing_report_time = make_timeout_time_ms(TIMING_REPORT_INTERVAL_MS);
+    uint64_t loop_start_time_us = time_us_64();
+    uint64_t total_work_time_us = 0;
+    uint64_t maximum_work_time_us = 0;
+    uint64_t total_loop_time_us = 0;
+    uint64_t maximum_loop_time_us = 0;
+    uint32_t loop_count = 0;
+
     while (1) {
         if (time_reached(next_hello_time)) {
             send_hello(
@@ -155,13 +175,65 @@ int main (void) {
             sizeof(payload),
             &payload_length
         )) {
+            uint64_t packet_start_time_us = time_us_64();
             handle_received_packet(payload, payload_length);
+            uint64_t packet_elapsed_time_us =
+                time_us_64() - packet_start_time_us;
+            if (timing_output_enabled) {
+                printf(
+                    "Packet handling: %llu us\n",
+                    (unsigned long long)packet_elapsed_time_us
+                );
+            }
         }
 
         tud_task(); // tinyusb device task
         tud_cdc_write_flush();
         lv_task_handler();
-        DEV_Delay_ms(5); 
+
+        uint64_t work_time_us = time_us_64() - loop_start_time_us;
+        DEV_Delay_ms(5);
+        uint64_t loop_time_us = time_us_64() - loop_start_time_us;
+
+        total_work_time_us += work_time_us;
+        total_loop_time_us += loop_time_us;
+        loop_count++;
+
+        if (work_time_us > maximum_work_time_us) {
+            maximum_work_time_us = work_time_us;
+        }
+
+        if (loop_time_us > maximum_loop_time_us) {
+            maximum_loop_time_us = loop_time_us;
+        }
+
+        if (time_reached(next_timing_report_time)) {
+            uint64_t average_work_time_us = total_work_time_us / loop_count;
+            uint64_t average_loop_time_us = total_loop_time_us / loop_count;
+
+            if (timing_output_enabled) {
+                printf(
+                    "Loop timing: work avg %llu us, work max %llu us, "
+                    "total avg %llu us, total max %llu us, loops %lu\n",
+                    (unsigned long long)average_work_time_us,
+                    (unsigned long long)maximum_work_time_us,
+                    (unsigned long long)average_loop_time_us,
+                    (unsigned long long)maximum_loop_time_us,
+                    (unsigned long)loop_count
+                );
+            }
+
+            total_work_time_us = 0;
+            maximum_work_time_us = 0;
+            total_loop_time_us = 0;
+            maximum_loop_time_us = 0;
+            loop_count = 0;
+            next_timing_report_time = make_timeout_time_ms(
+                TIMING_REPORT_INTERVAL_MS
+            );
+        }
+
+        loop_start_time_us = time_us_64();
     }
 
     DEV_Module_Exit();

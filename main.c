@@ -2,13 +2,19 @@
 #include "init_widgets.h"
 #include "framed_uart.h"
 #include "node_identity.h"
+#include "pb_decode.h"
+#include "pb_encode.h"
 #include "pio_uart.h"
+#include "protocol.pb.h"
 #include "tusb.h"
 #include "usb_descriptors.h"
+
+#include <string.h>
 
 #define PIO_UART_TX_PIN 4
 #define PIO_UART_RX_PIN 5
 #define PIO_UART_BAUD 115200
+#define PIO_UART_PORT 0
 
 // #define URL "localhost:8080"
 // const tusb_desc_webusb_url_t desc_url = {
@@ -22,19 +28,66 @@ static bool web_usb_connected = false;
 static PioUart test_uart = {0};
 static FramedUart test_framed_uart = {0};
 static NodeIdentity node_identity = {0};
-static const uint8_t uart_test_message[] = "PIO UART test\n";
 
-static void print_node_identity(NodeIdentity *identity) {
-    uint32_t sequence = node_identity_next_sequence(identity);
+static void send_hello(
+    FramedUart *framed_uart,
+    NodeIdentity *identity,
+    uint32_t sender_port
+) {
+    NetworkPacket packet = NetworkPacket_init_zero;
+    memcpy(
+        packet.source_node_id,
+        identity->node_id.id,
+        sizeof(packet.source_node_id)
+    );
+    packet.boot_id = identity->boot_id;
+    packet.sequence = node_identity_next_sequence(identity);
+    packet.which_payload = NetworkPacket_hello_tag;
+    packet.payload.hello.sender_port = sender_port;
 
+    uint8_t encoded_packet[NetworkPacket_size];
+    pb_ostream_t stream = pb_ostream_from_buffer(
+        encoded_packet,
+        sizeof(encoded_packet)
+    );
+
+    bool encoded = pb_encode(&stream, &NetworkPacket_msg, &packet);
+    hard_assert(encoded);
+    hard_assert(framed_uart_send(
+        framed_uart,
+        encoded_packet,
+        stream.bytes_written
+    ));
+}
+
+static void handle_received_packet(const uint8_t *data, size_t length) {
+    NetworkPacket packet = NetworkPacket_init_zero;
+    pb_istream_t stream = pb_istream_from_buffer(data, length);
+
+    bool decoded = pb_decode(&stream, &NetworkPacket_msg, &packet);
+    if (!decoded) {
+        printf("Failed to decode network packet\n");
+        return;
+    }
+
+    if (packet.which_payload != NetworkPacket_hello_tag) {
+        printf("Unsupported network packet\n");
+        return;
+    }
+
+    printf("Received HELLO\n");
     printf("Node ID: ");
-    for (size_t i = 0; i < PICO_UNIQUE_BOARD_ID_SIZE_BYTES; i++) {
-        unsigned int node_id_byte = identity->node_id.id[i];
+    for (size_t i = 0; i < sizeof(packet.source_node_id); i++) {
+        unsigned int node_id_byte = packet.source_node_id[i];
         printf("%02x", node_id_byte);
     }
 
-    printf("\nBoot ID: %08lx\n", (unsigned long)identity->boot_id);
-    printf("Sequence: %lu\n", (unsigned long)sequence);
+    printf("\nBoot ID: %08lx\n", (unsigned long)packet.boot_id);
+    printf("Sequence: %lu\n", (unsigned long)packet.sequence);
+    printf(
+        "Sender port: %lu\n",
+        (unsigned long)packet.payload.hello.sender_port
+    );
 }
 
 int main (void) {
@@ -76,12 +129,12 @@ int main (void) {
     size_t payload_length;
 
     while (1) {
-        if (take_uart_test_send_request()) {
-            hard_assert(framed_uart_send(
+        if (take_hello_send_request()) {
+            send_hello(
                 &test_framed_uart,
-                uart_test_message,
-                sizeof(uart_test_message) - 1
-            ));
+                &node_identity,
+                PIO_UART_PORT
+            );
         }
 
         while (framed_uart_try_receive(
@@ -90,11 +143,7 @@ int main (void) {
             sizeof(payload),
             &payload_length
         )) {
-            for (size_t i = 0; i < payload_length; i++) {
-                putchar(payload[i]);
-            }
-
-            print_node_identity(&node_identity);
+            handle_received_packet(payload, payload_length);
         }
 
         tud_task(); // tinyusb device task

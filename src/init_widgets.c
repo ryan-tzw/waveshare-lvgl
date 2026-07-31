@@ -9,9 +9,9 @@ static lv_obj_t *tile01;
 static lv_obj_t *tile02;
 
 // widgets
-static lv_obj_t *btn_uart_test;
+static lv_obj_t *btn_hello;
 static lv_obj_t *writable_label;
-static bool uart_test_send_requested = false;
+static bool hello_send_requested = false;
 
 // carousel stuff
 typedef struct {
@@ -33,7 +33,7 @@ static lv_obj_t *selected_button = NULL;
 
 // callbacks
 static void carousel_cb(lv_event_t *event);
-static void btn_uart_test_cb(lv_event_t *event);
+static void btn_hello_cb(lv_event_t *event);
 
 void init_widgets(void) {
     // Create tileview and tiles
@@ -112,19 +112,19 @@ void init_widgets(void) {
         Row 1
     */
     // Tile 01
-    btn_uart_test = lv_btn_create(tile01);
+    btn_hello = lv_btn_create(tile01);
     lv_obj_add_event_cb(
-        btn_uart_test,
-        btn_uart_test_cb,
+        btn_hello,
+        btn_hello_cb,
         LV_EVENT_CLICKED,
         NULL
     );
-    lv_obj_align(btn_uart_test, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_align(btn_hello, LV_ALIGN_CENTER, 0, 0);
 
-    lv_obj_t *btn_uart_test_label = lv_label_create(btn_uart_test);
-    lv_label_set_text(btn_uart_test_label, "PIO UART test");
-    lv_obj_center(btn_uart_test_label);
-    lv_obj_add_style(btn_uart_test_label, &style_label, 0);
+    lv_obj_t *btn_hello_label = lv_label_create(btn_hello);
+    lv_label_set_text(btn_hello_label, "Send HELLO");
+    lv_obj_center(btn_hello_label);
+    lv_obj_add_style(btn_hello_label, &style_label, 0);
 
     /*
         Row 2
@@ -153,13 +153,13 @@ static void carousel_cb(lv_event_t *event) {
     lv_obj_add_state(target, LV_STATE_CHECKED);
 }
 
-static void btn_uart_test_cb(lv_event_t *event) {
-    uart_test_send_requested = true;
+static void btn_hello_cb(lv_event_t *event) {
+    hello_send_requested = true;
 }
 
-bool take_uart_test_send_request(void) {
-    bool send_requested = uart_test_send_requested;
-    uart_test_send_requested = false;
+bool take_hello_send_request(void) {
+    bool send_requested = hello_send_requested;
+    hello_send_requested = false;
 
     return send_requested;
 }

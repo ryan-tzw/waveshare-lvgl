@@ -4,6 +4,7 @@
 #include "node_identity.h"
 #include "pb_decode.h"
 #include "pb_encode.h"
+#include "pico/time.h"
 #include "pio_uart.h"
 #include "protocol.pb.h"
 #include "tusb.h"
@@ -15,6 +16,7 @@
 #define PIO_UART_RX_PIN 5
 #define PIO_UART_BAUD 115200
 #define PIO_UART_PORT 0
+#define HELLO_INTERVAL_MS 1000
 
 // #define URL "localhost:8080"
 // const tusb_desc_webusb_url_t desc_url = {
@@ -125,10 +127,20 @@ int main (void) {
     };
     tusb_init(BOARD_TUD_RHPORT, &dev_init);
 
+    absolute_time_t next_hello_time = make_timeout_time_ms(HELLO_INTERVAL_MS);
     uint8_t payload[FRAMED_UART_MAX_PAYLOAD_SIZE];
     size_t payload_length;
 
     while (1) {
+        if (time_reached(next_hello_time)) {
+            send_hello(
+                &test_framed_uart,
+                &node_identity,
+                PIO_UART_PORT
+            );
+            next_hello_time = make_timeout_time_ms(HELLO_INTERVAL_MS);
+        }
+
         if (take_hello_send_request()) {
             send_hello(
                 &test_framed_uart,

@@ -1,0 +1,15 @@
+syntax = "proto3";
+
+message Hello {
+    uint32 sender_port = 1;
+}
+
+message NetworkPacket {
+    bytes source_node_id = 1;
+    fixed32 boot_id = 2;
+    uint32 sequence = 3;
+
+    oneof payload {
+        Hello hello = 4;
+    }
+}

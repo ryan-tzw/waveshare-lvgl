@@ -1,6 +1,7 @@
 #include "init.h"
 #include "init_widgets.h"
 #include "framed_uart.h"
+#include "node_identity.h"
 #include "pio_uart.h"
 #include "tusb.h"
 #include "usb_descriptors.h"
@@ -20,9 +21,24 @@
 static bool web_usb_connected = false;
 static PioUart test_uart = {0};
 static FramedUart test_framed_uart = {0};
+static NodeIdentity node_identity = {0};
+
+static void print_node_identity(NodeIdentity *identity) {
+    uint32_t sequence = node_identity_next_sequence(identity);
+
+    printf("Node ID: ");
+    for (size_t i = 0; i < PICO_UNIQUE_BOARD_ID_SIZE_BYTES; i++) {
+        unsigned int node_id_byte = identity->node_id.id[i];
+        printf("%02x", node_id_byte);
+    }
+
+    printf("\nBoot ID: %08lx\n", (unsigned long)identity->boot_id);
+    printf("Sequence: %lu\n", (unsigned long)sequence);
+}
 
 int main (void) {
     if (DEV_Module_Init() != 0) { return -1; } 
+    hard_assert(node_identity_init(&node_identity));
     hard_assert(
         pio_uart_init(
             &test_uart,
@@ -68,6 +84,8 @@ int main (void) {
             for (size_t i = 0; i < payload_length; i++) {
                 putchar(payload[i]);
             }
+
+            print_node_identity(&node_identity);
         }
 
         tud_task(); // tinyusb device task

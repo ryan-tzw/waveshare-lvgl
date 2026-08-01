@@ -17,7 +17,8 @@
 #define PIO_UART_BAUD 115200
 #define PIO_UART_PORT 0
 #define PIO_UART_PORT_COUNT 4
-#define HELLO_INTERVAL_MS 1000
+#define HELLO_INTERVAL_MS 500
+#define NEIGHBOR_TIMEOUT_US 1500000 // 1500 ms
 #define TIMING_REPORT_INTERVAL_MS 1000
 
 // #define URL "localhost:8080"
@@ -34,6 +35,7 @@ typedef struct {
     uint32_t boot_id;
     uint32_t remote_port;
     uint32_t sequence;
+    uint64_t last_hello_time_us;
 } Neighbor;
 
 static bool web_usb_connected = false;
@@ -149,10 +151,33 @@ static void handle_received_packet(
     neighbor->boot_id = packet.boot_id;
     neighbor->remote_port = packet.payload.hello.sender_port;
     neighbor->sequence = packet.sequence;
+    neighbor->last_hello_time_us = time_us_64();
     neighbor->observed = true;
 
     if (neighbor_event != NULL) {
         print_neighbor(neighbor_event, neighbor, local_port);
+    }
+}
+
+static void check_neighbor_timeouts(void) {
+    uint64_t current_time_us = time_us_64();
+
+    for (uint32_t local_port = 0; local_port < PIO_UART_PORT_COUNT; local_port++) {
+        Neighbor *neighbor = &neighbors[local_port];
+
+        if (!neighbor->observed) {
+            continue;
+        }
+
+        uint64_t elapsed_time_us =
+            current_time_us - neighbor->last_hello_time_us;
+
+        if (elapsed_time_us < NEIGHBOR_TIMEOUT_US) {
+            continue;
+        }
+
+        print_neighbor("Neighbor disconnected", neighbor, local_port);
+        neighbor->observed = false;
     }
 }
 
@@ -243,6 +268,8 @@ int main (void) {
                 );
             }
         }
+
+        check_neighbor_timeouts();
 
         tud_task(); // tinyusb device task
         tud_cdc_write_flush();

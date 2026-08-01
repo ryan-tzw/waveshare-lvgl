@@ -1,1 +1,3 @@
 NetworkPacket.source_node_id max_size:8, fixed_length:true
+LinkStateNeighbor.node_id max_size:8, fixed_length:true
+LinkState.neighbors max_count:4

@@ -4,6 +4,16 @@ message Hello {
     uint32 sender_port = 1;
 }
 
+message LinkStateNeighbor {
+    bytes node_id = 1;
+    uint32 local_port = 2;
+    uint32 remote_port = 3;
+}
+
+message LinkState {
+    repeated LinkStateNeighbor neighbors = 1;
+}
+
 message NetworkPacket {
     bytes source_node_id = 1;
     fixed32 boot_id = 2;
@@ -11,5 +21,6 @@ message NetworkPacket {
 
     oneof payload {
         Hello hello = 4;
+        LinkState link_state = 5;
     }
 }

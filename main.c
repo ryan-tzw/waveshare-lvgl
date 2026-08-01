@@ -12,10 +12,8 @@
 
 #include <string.h>
 
-#define PIO_UART_TX_PIN 4
-#define PIO_UART_RX_PIN 5
+
 #define PIO_UART_BAUD 115200
-#define PIO_UART_PORT 0
 #define PIO_UART_PORT_COUNT 4
 #define HELLO_INTERVAL_MS 500
 #define NEIGHBOR_TIMEOUT_US 1500000 // 1500 ms
@@ -30,6 +28,11 @@
 // };
 
 typedef struct {
+    uint32_t tx_pin;
+    uint32_t rx_pin;
+} PioUartPinPair;
+
+typedef struct {
     bool observed;
     uint8_t node_id[PICO_UNIQUE_BOARD_ID_SIZE_BYTES];
     uint32_t boot_id;
@@ -38,9 +41,16 @@ typedef struct {
     uint64_t last_hello_time_us;
 } Neighbor;
 
+static const PioUartPinPair pio_uart_pin_pairs[PIO_UART_PORT_COUNT] = {
+    {.tx_pin = 3, .rx_pin = 0},
+    {.tx_pin = 4, .rx_pin = 10},
+    {.tx_pin = 6, .rx_pin = 5},
+    {.tx_pin = 23, .rx_pin = 11}
+};
+
 static bool web_usb_connected = false;
-static PioUart test_uart = {0};
-static FramedUart test_framed_uart = {0};
+static PioUart pio_uarts[PIO_UART_PORT_COUNT] = {0};
+static FramedUart framed_uarts[PIO_UART_PORT_COUNT] = {0};
 static NodeIdentity node_identity = {0};
 static Neighbor neighbors[PIO_UART_PORT_COUNT] = {0};
 static const bool timing_output_enabled = false;
@@ -80,7 +90,8 @@ static void send_hello(
     uint64_t elapsed_time_us = time_us_64() - start_time_us;
     if (timing_output_enabled) {
         printf(
-            "HELLO send: %llu us\n",
+            "HELLO send on port %lu: %llu us\n",
+            (unsigned long)sender_port,
             (unsigned long long)elapsed_time_us
         );
     }
@@ -184,15 +195,26 @@ static void check_neighbor_timeouts(void) {
 int main (void) {
     if (DEV_Module_Init() != 0) { return -1; } 
     hard_assert(node_identity_init(&node_identity));
-    hard_assert(
-        pio_uart_init(
-            &test_uart,
-            PIO_UART_TX_PIN,
-            PIO_UART_RX_PIN,
-            PIO_UART_BAUD
-        )
-    );
-    hard_assert(framed_uart_init(&test_framed_uart, &test_uart));
+
+    for (uint32_t local_port = 0; local_port < PIO_UART_PORT_COUNT; local_port++) {
+        uint32_t tx_pin = pio_uart_pin_pairs[local_port].tx_pin;
+        uint32_t rx_pin = pio_uart_pin_pairs[local_port].rx_pin;
+
+        hard_assert(
+            pio_uart_init(
+                &pio_uarts[local_port],
+                tx_pin,
+                rx_pin,
+                PIO_UART_BAUD
+            )
+        );
+        hard_assert(
+            framed_uart_init(
+                &framed_uarts[local_port],
+                &pio_uarts[local_port]
+            )
+        );
+    }
 
     /* Init LCD */
     Scan_dir = VERTICAL;
@@ -230,42 +252,61 @@ int main (void) {
 
     while (1) {
         if (time_reached(next_hello_time)) {
-            send_hello(
-                &test_framed_uart,
-                &node_identity,
-                PIO_UART_PORT
-            );
+            for (
+                uint32_t local_port = 0;
+                local_port < PIO_UART_PORT_COUNT;
+                local_port++
+            ) {
+                send_hello(
+                    &framed_uarts[local_port],
+                    &node_identity,
+                    local_port
+                );
+            }
             next_hello_time = make_timeout_time_ms(HELLO_INTERVAL_MS);
         }
 
         if (take_hello_send_request()) {
-            send_hello(
-                &test_framed_uart,
-                &node_identity,
-                PIO_UART_PORT
-            );
+            for (
+                uint32_t local_port = 0;
+                local_port < PIO_UART_PORT_COUNT;
+                local_port++
+            ) {
+                send_hello(
+                    &framed_uarts[local_port],
+                    &node_identity,
+                    local_port
+                );
+            }
         }
 
-        while (framed_uart_try_receive(
-            &test_framed_uart,
-            payload,
-            sizeof(payload),
-            &payload_length
-        )) {
-            uint64_t packet_start_time_us = time_us_64();
-            handle_received_packet(
+        for (
+            uint32_t local_port = 0;
+            local_port < PIO_UART_PORT_COUNT;
+            local_port++
+        ) {
+            while (framed_uart_try_receive(
+                &framed_uarts[local_port],
                 payload,
-                payload_length,
-                PIO_UART_PORT,
-                &neighbors[PIO_UART_PORT]
-            );
-            uint64_t packet_elapsed_time_us =
-                time_us_64() - packet_start_time_us;
-            if (timing_output_enabled) {
-                printf(
-                    "Packet handling: %llu us\n",
-                    (unsigned long long)packet_elapsed_time_us
+                sizeof(payload),
+                &payload_length
+            )) {
+                uint64_t packet_start_time_us = time_us_64();
+                handle_received_packet(
+                    payload,
+                    payload_length,
+                    local_port,
+                    &neighbors[local_port]
                 );
+                uint64_t packet_elapsed_time_us =
+                    time_us_64() - packet_start_time_us;
+                if (timing_output_enabled) {
+                    printf(
+                        "Packet handling on port %lu: %llu us\n",
+                        (unsigned long)local_port,
+                        (unsigned long long)packet_elapsed_time_us
+                    );
+                }
             }
         }
 

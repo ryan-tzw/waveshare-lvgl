@@ -39,7 +39,6 @@ typedef struct {
     uint8_t node_id[PICO_UNIQUE_BOARD_ID_SIZE_BYTES];
     uint32_t boot_id;
     uint32_t remote_port;
-    uint32_t sequence;
     uint64_t last_hello_time_us;
 } Neighbor;
 
@@ -79,7 +78,6 @@ static void send_hello(
         sizeof(packet.source_node_id)
     );
     packet.boot_id = identity->boot_id;
-    packet.sequence = node_identity_next_sequence(identity);
     packet.which_payload = NetworkPacket_hello_tag;
     packet.payload.hello.sender_port = sender_port;
 
@@ -123,7 +121,6 @@ static void print_neighbor(
 
     printf("\nBoot ID: %08lx\n", (unsigned long)neighbor->boot_id);
     printf("Remote port: %lu\n", (unsigned long)neighbor->remote_port);
-    printf("Sequence: %lu\n", (unsigned long)neighbor->sequence);
 }
 
 static void print_link_state(const NetworkPacket *packet) {
@@ -439,7 +436,6 @@ static bool handle_received_packet(
     );
     neighbor->boot_id = packet.boot_id;
     neighbor->remote_port = packet.payload.hello.sender_port;
-    neighbor->sequence = packet.sequence;
     neighbor->last_hello_time_us = time_us_64();
     neighbor->observed = true;
 

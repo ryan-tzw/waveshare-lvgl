@@ -121,7 +121,7 @@ bool node_identity_init(NodeIdentity *identity) {
 
     pico_get_unique_board_id(&identity->node_id);
     identity->boot_id = boot_id;
-    identity->next_sequence = 0;
+    identity->next_sequence = 1;
     identity->initialized = true;
 
     return true;

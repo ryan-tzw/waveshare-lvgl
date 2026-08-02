@@ -105,6 +105,48 @@ static void send_hello(
     }
 }
 
+static void send_ack(
+    FramedUart *framed_uart,
+    const NodeIdentity *identity,
+    const NetworkPacket *acknowledged_packet
+) {
+    hard_assert(
+        acknowledged_packet->which_payload == NetworkPacket_link_state_tag
+    );
+
+    NetworkPacket packet = NetworkPacket_init_zero;
+    memcpy(
+        packet.source_node_id,
+        identity->node_id.id,
+        sizeof(packet.source_node_id)
+    );
+    packet.boot_id = identity->boot_id;
+    packet.which_payload = NetworkPacket_ack_tag;
+
+    Ack *ack = &packet.payload.ack;
+    memcpy(
+        ack->acknowledged_node_id,
+        acknowledged_packet->source_node_id,
+        sizeof(ack->acknowledged_node_id)
+    );
+    ack->acknowledged_boot_id = acknowledged_packet->boot_id;
+    ack->acknowledged_sequence = acknowledged_packet->sequence;
+
+    uint8_t encoded_packet[NetworkPacket_size];
+    pb_ostream_t stream = pb_ostream_from_buffer(
+        encoded_packet,
+        sizeof(encoded_packet)
+    );
+
+    bool encoded = pb_encode(&stream, &NetworkPacket_msg, &packet);
+    hard_assert(encoded);
+    hard_assert(framed_uart_send(
+        framed_uart,
+        encoded_packet,
+        stream.bytes_written
+    ));
+}
+
 static void print_neighbor(
     const char *event,
     const Neighbor *neighbor,
@@ -159,6 +201,39 @@ static void print_link_state(const NetworkPacket *packet) {
             (unsigned long)neighbor->remote_port
         );
     }
+}
+
+static void print_ack(const NetworkPacket *packet, uint32_t local_port) {
+    const Ack *ack = &packet->payload.ack;
+
+    printf("Received ACK\n");
+    printf("Ingress port: %lu\n", (unsigned long)local_port);
+
+    printf("ACK sender node ID: ");
+    for (size_t i = 0; i < sizeof(packet->source_node_id); i++) {
+        unsigned int node_id_byte = packet->source_node_id[i];
+        printf("%02x", node_id_byte);
+    }
+
+    printf(
+        "\nACK sender boot ID: %08lx\n",
+        (unsigned long)packet->boot_id
+    );
+
+    printf("Acknowledged node ID: ");
+    for (size_t i = 0; i < sizeof(ack->acknowledged_node_id); i++) {
+        unsigned int node_id_byte = ack->acknowledged_node_id[i];
+        printf("%02x", node_id_byte);
+    }
+
+    printf(
+        "\nAcknowledged boot ID: %08lx\n",
+        (unsigned long)ack->acknowledged_boot_id
+    );
+    printf(
+        "Acknowledged sequence: %lu\n",
+        (unsigned long)ack->acknowledged_sequence
+    );
 }
 
 static LinkStateDatabaseEntry *find_link_state_entry(
@@ -222,7 +297,7 @@ static bool link_state_version_is_newer(
     return received->sequence > stored->sequence;
 }
 
-static void store_received_link_state(
+static bool store_received_link_state(
     const NetworkPacket *packet,
     uint32_t local_port
 ) {
@@ -254,7 +329,7 @@ static void store_received_link_state(
             );
         }
 
-        return;
+        return true;
     }
 
     if (entry == NULL) {
@@ -265,7 +340,7 @@ static void store_received_link_state(
                 "LINK_STATE database full; packet ignored on port %lu\n",
                 (unsigned long)local_port
             );
-            return;
+            return false;
         }
 
         entry->packet = *packet;
@@ -275,7 +350,7 @@ static void store_received_link_state(
         printf("Remote LINK_STATE stored\n");
         printf("Ingress port: %lu\n", (unsigned long)local_port);
         print_link_state(&entry->packet);
-        return;
+        return true;
     }
 
     if (link_state_versions_match(packet, &entry->packet)) {
@@ -284,7 +359,7 @@ static void store_received_link_state(
             "Duplicate LINK_STATE received on port %lu\n",
             (unsigned long)local_port
         );
-        return;
+        return true;
     }
 
     if (!link_state_version_is_newer(packet, &entry->packet)) {
@@ -292,7 +367,7 @@ static void store_received_link_state(
             "Stale LINK_STATE ignored on port %lu\n",
             (unsigned long)local_port
         );
-        return;
+        return true;
     }
 
     entry->packet = *packet;
@@ -301,6 +376,8 @@ static void store_received_link_state(
     printf("Remote LINK_STATE updated\n");
     printf("Ingress port: %lu\n", (unsigned long)local_port);
     print_link_state(&entry->packet);
+
+    return true;
 }
 
 static void update_local_link_state(
@@ -399,7 +476,24 @@ static bool handle_received_packet(
     }
 
     if (packet.which_payload == NetworkPacket_link_state_tag) {
-        store_received_link_state(&packet, local_port);
+        bool should_acknowledge = store_received_link_state(
+            &packet,
+            local_port
+        );
+
+        if (should_acknowledge) {
+            send_ack(
+                &framed_uarts[local_port],
+                &node_identity,
+                &packet
+            );
+        }
+
+        return false;
+    }
+
+    if (packet.which_payload == NetworkPacket_ack_tag) {
+        print_ack(&packet, local_port);
         return false;
     }
 

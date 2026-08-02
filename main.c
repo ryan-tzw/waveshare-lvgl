@@ -20,6 +20,7 @@
 #define TIMING_REPORT_INTERVAL_MS 1000
 #define LINK_STATE_DATABASE_CAPACITY 64
 #define LOCAL_LINK_STATE_INDEX 0
+#define LINK_STATE_RETRY_INTERVAL_US 250000
 
 // #define URL "localhost:8080"
 // const tusb_desc_webusb_url_t desc_url = {
@@ -54,6 +55,7 @@ typedef struct {
     uint8_t pending_node_id[PICO_UNIQUE_BOARD_ID_SIZE_BYTES];
     uint32_t pending_boot_id;
     uint32_t pending_sequence;
+    uint64_t next_retry_time_us;
 } LinkStateTransmissionState;
 
 static const PioUartPinPair pio_uart_pin_pairs[PIO_UART_PORT_COUNT] = {
@@ -315,30 +317,7 @@ static void reset_link_state_transmission(uint32_t local_port) {
 }
 
 static void request_link_state_scan(uint32_t local_port) {
-    LinkStateTransmissionState *transmission =
-        &link_state_transmissions[local_port];
-    transmission->scan_requested = true;
-
-    if (!transmission->waiting_for_ack) {
-        return;
-    }
-
-    LinkStateDatabaseEntry *entry = find_link_state_entry(
-        transmission->pending_node_id
-    );
-    bool pending_version_is_current =
-        entry != NULL &&
-        entry->packet.boot_id == transmission->pending_boot_id &&
-        entry->packet.sequence == transmission->pending_sequence;
-
-    uint8_t port_mask = (uint8_t)(1u << local_port);
-    bool pending_version_is_known =
-        entry != NULL &&
-        (entry->known_by_ports & port_mask) != 0;
-
-    if (!pending_version_is_current || pending_version_is_known) {
-        transmission->waiting_for_ack = false;
-    }
+    link_state_transmissions[local_port].scan_requested = true;
 }
 
 static void request_link_state_scans_for_observed_neighbors(void) {
@@ -554,6 +533,7 @@ static void update_local_link_state(
 }
 
 static void send_link_state(
+    const char *event,
     const LinkStateDatabaseEntry *entry,
     FramedUart *framed_uart,
     uint32_t local_port
@@ -580,7 +560,8 @@ static void send_link_state(
     ));
 
     printf(
-        "Sending LINK_STATE on port %lu\n",
+        "%s LINK_STATE on port %lu\n",
+        event,
         (unsigned long)local_port
     );
     print_link_state(&entry->packet);
@@ -590,17 +571,51 @@ static void service_link_state_transmission(uint32_t local_port) {
     LinkStateTransmissionState *transmission =
         &link_state_transmissions[local_port];
 
-    if (!transmission->scan_requested || transmission->waiting_for_ack) {
-        return;
-    }
-
     if (!neighbors[local_port].observed) {
         transmission->scan_requested = false;
         return;
     }
 
-    transmission->scan_requested = false;
     uint8_t port_mask = (uint8_t)(1u << local_port);
+
+    if (transmission->waiting_for_ack) {
+        LinkStateDatabaseEntry *entry = find_link_state_entry(
+            transmission->pending_node_id
+        );
+        bool pending_version_is_current =
+            entry != NULL &&
+            entry->packet.boot_id == transmission->pending_boot_id &&
+            entry->packet.sequence == transmission->pending_sequence;
+        bool pending_version_is_known =
+            entry != NULL &&
+            (entry->known_by_ports & port_mask) != 0;
+
+        if (!pending_version_is_current || pending_version_is_known) {
+            transmission->waiting_for_ack = false;
+            transmission->scan_requested = true;
+        } else {
+            uint64_t current_time_us = time_us_64();
+
+            if (current_time_us >= transmission->next_retry_time_us) {
+                send_link_state(
+                    "Retrying",
+                    entry,
+                    &framed_uarts[local_port],
+                    local_port
+                );
+                transmission->next_retry_time_us =
+                    time_us_64() + LINK_STATE_RETRY_INTERVAL_US;
+            }
+
+            return;
+        }
+    }
+
+    if (!transmission->scan_requested) {
+        return;
+    }
+
+    transmission->scan_requested = false;
 
     for (
         size_t entry_index = 0;
@@ -618,7 +633,12 @@ static void service_link_state_transmission(uint32_t local_port) {
             continue;
         }
 
-        send_link_state(entry, &framed_uarts[local_port], local_port);
+        send_link_state(
+            "Sending",
+            entry,
+            &framed_uarts[local_port],
+            local_port
+        );
 
         transmission->waiting_for_ack = true;
         memcpy(
@@ -628,6 +648,8 @@ static void service_link_state_transmission(uint32_t local_port) {
         );
         transmission->pending_boot_id = entry->packet.boot_id;
         transmission->pending_sequence = entry->packet.sequence;
+        transmission->next_retry_time_us =
+            time_us_64() + LINK_STATE_RETRY_INTERVAL_US;
         return;
     }
 }

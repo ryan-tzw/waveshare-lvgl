@@ -18,6 +18,8 @@
 #define HELLO_INTERVAL_MS 500
 #define NEIGHBOR_TIMEOUT_US 1500000 // 1500 ms
 #define TIMING_REPORT_INTERVAL_MS 1000
+#define LINK_STATE_DATABASE_CAPACITY 64
+#define LOCAL_LINK_STATE_INDEX 0
 
 // #define URL "localhost:8080"
 // const tusb_desc_webusb_url_t desc_url = {
@@ -59,7 +61,8 @@ static PioUart pio_uarts[PIO_UART_PORT_COUNT] = {0};
 static FramedUart framed_uarts[PIO_UART_PORT_COUNT] = {0};
 static NodeIdentity node_identity = {0};
 static Neighbor neighbors[PIO_UART_PORT_COUNT] = {0};
-static LinkStateDatabaseEntry local_link_state_entry = {0};
+static LinkStateDatabaseEntry
+    link_state_database[LINK_STATE_DATABASE_CAPACITY] = {0};
 static const bool timing_output_enabled = false;
 
 static void send_hello(
@@ -161,6 +164,148 @@ static void print_link_state(const NetworkPacket *packet) {
     }
 }
 
+static LinkStateDatabaseEntry *find_link_state_entry(
+    const uint8_t *source_node_id
+) {
+    for (
+        size_t entry_index = 0;
+        entry_index < LINK_STATE_DATABASE_CAPACITY;
+        entry_index++
+    ) {
+        LinkStateDatabaseEntry *entry = &link_state_database[entry_index];
+
+        if (!entry->occupied) {
+            continue;
+        }
+
+        if (memcmp(
+            entry->packet.source_node_id,
+            source_node_id,
+            sizeof(entry->packet.source_node_id)
+        ) == 0) {
+            return entry;
+        }
+    }
+
+    return NULL;
+}
+
+static LinkStateDatabaseEntry *find_empty_link_state_entry(void) {
+    for (
+        size_t entry_index = LOCAL_LINK_STATE_INDEX + 1;
+        entry_index < LINK_STATE_DATABASE_CAPACITY;
+        entry_index++
+    ) {
+        LinkStateDatabaseEntry *entry = &link_state_database[entry_index];
+
+        if (!entry->occupied) {
+            return entry;
+        }
+    }
+
+    return NULL;
+}
+
+static bool link_state_versions_match(
+    const NetworkPacket *first,
+    const NetworkPacket *second
+) {
+    return first->boot_id == second->boot_id &&
+           first->sequence == second->sequence;
+}
+
+static bool link_state_version_is_newer(
+    const NetworkPacket *received,
+    const NetworkPacket *stored
+) {
+    if (received->boot_id != stored->boot_id) {
+        return received->boot_id > stored->boot_id;
+    }
+
+    return received->sequence > stored->sequence;
+}
+
+static void store_received_link_state(
+    const NetworkPacket *packet,
+    uint32_t local_port
+) {
+    uint8_t ingress_port_mask = (uint8_t)(1u << local_port);
+    LinkStateDatabaseEntry *entry = find_link_state_entry(
+        packet->source_node_id
+    );
+
+    bool source_is_local = memcmp(
+        packet->source_node_id,
+        node_identity.node_id.id,
+        sizeof(packet->source_node_id)
+    ) == 0;
+
+    if (source_is_local) {
+        if (
+            entry != NULL &&
+            link_state_versions_match(packet, &entry->packet)
+        ) {
+            entry->known_by_ports |= ingress_port_mask;
+            printf(
+                "Duplicate local LINK_STATE received on port %lu\n",
+                (unsigned long)local_port
+            );
+        } else {
+            printf(
+                "Conflicting local LINK_STATE ignored on port %lu\n",
+                (unsigned long)local_port
+            );
+        }
+
+        return;
+    }
+
+    if (entry == NULL) {
+        entry = find_empty_link_state_entry();
+
+        if (entry == NULL) {
+            printf(
+                "LINK_STATE database full; packet ignored on port %lu\n",
+                (unsigned long)local_port
+            );
+            return;
+        }
+
+        entry->packet = *packet;
+        entry->occupied = true;
+        entry->known_by_ports = ingress_port_mask;
+
+        printf("Remote LINK_STATE stored\n");
+        printf("Ingress port: %lu\n", (unsigned long)local_port);
+        print_link_state(&entry->packet);
+        return;
+    }
+
+    if (link_state_versions_match(packet, &entry->packet)) {
+        entry->known_by_ports |= ingress_port_mask;
+        printf(
+            "Duplicate LINK_STATE received on port %lu\n",
+            (unsigned long)local_port
+        );
+        return;
+    }
+
+    if (!link_state_version_is_newer(packet, &entry->packet)) {
+        printf(
+            "Stale LINK_STATE ignored on port %lu\n",
+            (unsigned long)local_port
+        );
+        return;
+    }
+
+    entry->packet = *packet;
+    entry->known_by_ports = ingress_port_mask;
+
+    printf("Remote LINK_STATE updated\n");
+    printf("Ingress port: %lu\n", (unsigned long)local_port);
+    print_link_state(&entry->packet);
+}
+
 static void update_local_link_state(
     LinkStateDatabaseEntry *entry,
     NodeIdentity *identity,
@@ -257,9 +402,7 @@ static bool handle_received_packet(
     }
 
     if (packet.which_payload == NetworkPacket_link_state_tag) {
-        printf("Received LINK_STATE\n");
-        printf("Ingress port: %lu\n", (unsigned long)local_port);
-        print_link_state(&packet);
+        store_received_link_state(&packet, local_port);
         return false;
     }
 
@@ -463,12 +606,12 @@ int main (void) {
 
         if (adjacency_changed) {
             update_local_link_state(
-                &local_link_state_entry,
+                &link_state_database[LOCAL_LINK_STATE_INDEX],
                 &node_identity,
                 neighbors
             );
             send_link_state(
-                &local_link_state_entry,
+                &link_state_database[LOCAL_LINK_STATE_INDEX],
                 framed_uarts,
                 neighbors
             );

@@ -297,6 +297,42 @@ static bool link_state_version_is_newer(
     return received->sequence > stored->sequence;
 }
 
+static void handle_received_ack(
+    const NetworkPacket *packet,
+    uint32_t local_port,
+    const Neighbor *neighbor
+) {
+    print_ack(packet, local_port);
+
+    const Ack *ack = &packet->payload.ack;
+    bool sender_node_id_matches = memcmp(
+        packet->source_node_id,
+        neighbor->node_id,
+        sizeof(neighbor->node_id)
+    ) == 0;
+    bool sender_matches_neighbor =
+        neighbor->observed &&
+        sender_node_id_matches &&
+        packet->boot_id == neighbor->boot_id;
+
+    LinkStateDatabaseEntry *entry = find_link_state_entry(
+        ack->acknowledged_node_id
+    );
+    bool acknowledged_version_matches =
+        entry != NULL &&
+        entry->packet.boot_id == ack->acknowledged_boot_id &&
+        entry->packet.sequence == ack->acknowledged_sequence;
+
+    if (!sender_matches_neighbor || !acknowledged_version_matches) {
+        printf("ACK ignored\n");
+        return;
+    }
+
+    uint8_t ingress_port_mask = (uint8_t)(1u << local_port);
+    entry->known_by_ports |= ingress_port_mask;
+    printf("ACK accepted\n");
+}
+
 static bool store_received_link_state(
     const NetworkPacket *packet,
     uint32_t local_port
@@ -493,7 +529,7 @@ static bool handle_received_packet(
     }
 
     if (packet.which_payload == NetworkPacket_ack_tag) {
-        print_ack(&packet, local_port);
+        handle_received_ack(&packet, local_port, neighbor);
         return false;
     }
 

@@ -278,6 +278,28 @@ static LinkStateDatabaseEntry *find_empty_link_state_entry(void) {
     return NULL;
 }
 
+static void clear_link_state_knowledge(uint32_t local_port) {
+    uint8_t port_mask = (uint8_t)(1u << local_port);
+    uint8_t other_ports_mask = (uint8_t)~port_mask;
+
+    for (
+        size_t entry_index = 0;
+        entry_index < LINK_STATE_DATABASE_CAPACITY;
+        entry_index++
+    ) {
+        LinkStateDatabaseEntry *entry = &link_state_database[entry_index];
+
+        if (entry->occupied) {
+            entry->known_by_ports &= other_ports_mask;
+        }
+    }
+
+    printf(
+        "LINK_STATE knowledge cleared for port %lu\n",
+        (unsigned long)local_port
+    );
+}
+
 static bool link_state_versions_match(
     const NetworkPacket *first,
     const NetworkPacket *second
@@ -545,18 +567,27 @@ static bool handle_received_packet(
     ) != 0;
     bool remote_port_changed =
         neighbor->remote_port != packet.payload.hello.sender_port;
+    bool neighbor_replaced = neighbor->observed && node_id_changed;
+    bool neighbor_restarted =
+        neighbor->observed &&
+        !node_id_changed &&
+        neighbor->boot_id != packet.boot_id;
     bool adjacency_changed =
         !neighbor->observed || node_id_changed || remote_port_changed;
 
     const char *neighbor_event = NULL;
     if (!neighbor->observed) {
         neighbor_event = "Neighbor discovered";
-    } else if (node_id_changed) {
+    } else if (neighbor_replaced) {
         neighbor_event = "Neighbor replaced";
-    } else if (neighbor->boot_id != packet.boot_id) {
+    } else if (neighbor_restarted) {
         neighbor_event = "Neighbor restarted";
     } else if (remote_port_changed) {
         neighbor_event = "Neighbor port changed";
+    }
+
+    if (neighbor_replaced || neighbor_restarted) {
+        clear_link_state_knowledge(local_port);
     }
 
     memcpy(
@@ -595,6 +626,7 @@ static bool check_neighbor_timeouts(void) {
         }
 
         print_neighbor("Neighbor disconnected", neighbor, local_port);
+        clear_link_state_knowledge(local_port);
         neighbor->observed = false;
         adjacency_changed = true;
     }

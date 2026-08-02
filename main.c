@@ -48,6 +48,14 @@ typedef struct {
     uint8_t known_by_ports;
 } LinkStateDatabaseEntry;
 
+typedef struct {
+    bool waiting_for_ack;
+    bool scan_requested;
+    uint8_t pending_node_id[PICO_UNIQUE_BOARD_ID_SIZE_BYTES];
+    uint32_t pending_boot_id;
+    uint32_t pending_sequence;
+} LinkStateTransmissionState;
+
 static const PioUartPinPair pio_uart_pin_pairs[PIO_UART_PORT_COUNT] = {
     {.tx_pin = 3, .rx_pin = 0},
     {.tx_pin = 4, .rx_pin = 10},
@@ -62,6 +70,8 @@ static NodeIdentity node_identity = {0};
 static Neighbor neighbors[PIO_UART_PORT_COUNT] = {0};
 static LinkStateDatabaseEntry
     link_state_database[LINK_STATE_DATABASE_CAPACITY] = {0};
+static LinkStateTransmissionState
+    link_state_transmissions[PIO_UART_PORT_COUNT] = {0};
 static const bool timing_output_enabled = false;
 
 static void send_hello(
@@ -300,6 +310,45 @@ static void clear_link_state_knowledge(uint32_t local_port) {
     );
 }
 
+static void reset_link_state_transmission(uint32_t local_port) {
+    link_state_transmissions[local_port] = (LinkStateTransmissionState){0};
+}
+
+static void request_link_state_scan(uint32_t local_port) {
+    LinkStateTransmissionState *transmission =
+        &link_state_transmissions[local_port];
+    transmission->scan_requested = true;
+
+    if (!transmission->waiting_for_ack) {
+        return;
+    }
+
+    LinkStateDatabaseEntry *entry = find_link_state_entry(
+        transmission->pending_node_id
+    );
+    bool pending_version_is_current =
+        entry != NULL &&
+        entry->packet.boot_id == transmission->pending_boot_id &&
+        entry->packet.sequence == transmission->pending_sequence;
+
+    uint8_t port_mask = (uint8_t)(1u << local_port);
+    bool pending_version_is_known =
+        entry != NULL &&
+        (entry->known_by_ports & port_mask) != 0;
+
+    if (!pending_version_is_current || pending_version_is_known) {
+        transmission->waiting_for_ack = false;
+    }
+}
+
+static void request_link_state_scans_for_observed_neighbors(void) {
+    for (uint32_t local_port = 0; local_port < PIO_UART_PORT_COUNT; local_port++) {
+        if (neighbors[local_port].observed) {
+            request_link_state_scan(local_port);
+        }
+    }
+}
+
 static bool link_state_versions_match(
     const NetworkPacket *first,
     const NetworkPacket *second
@@ -352,6 +401,24 @@ static void handle_received_ack(
 
     uint8_t ingress_port_mask = (uint8_t)(1u << local_port);
     entry->known_by_ports |= ingress_port_mask;
+
+    LinkStateTransmissionState *transmission =
+        &link_state_transmissions[local_port];
+    bool ack_matches_pending_transmission =
+        transmission->waiting_for_ack &&
+        memcmp(
+            ack->acknowledged_node_id,
+            transmission->pending_node_id,
+            sizeof(transmission->pending_node_id)
+        ) == 0 &&
+        ack->acknowledged_boot_id == transmission->pending_boot_id &&
+        ack->acknowledged_sequence == transmission->pending_sequence;
+
+    if (ack_matches_pending_transmission) {
+        transmission->waiting_for_ack = false;
+    }
+
+    request_link_state_scan(local_port);
     printf("ACK accepted\n");
 }
 
@@ -486,8 +553,8 @@ static void update_local_link_state(
 
 static void send_link_state(
     const LinkStateDatabaseEntry *entry,
-    FramedUart *ports,
-    const Neighbor *current_neighbors
+    FramedUart *framed_uart,
+    uint32_t local_port
 ) {
     hard_assert(entry->occupied);
     hard_assert(entry->packet.which_payload == NetworkPacket_link_state_tag);
@@ -504,17 +571,60 @@ static void send_link_state(
         &entry->packet
     );
     hard_assert(encoded);
+    hard_assert(framed_uart_send(
+        framed_uart,
+        encoded_packet,
+        stream.bytes_written
+    ));
 
-    for (uint32_t local_port = 0; local_port < PIO_UART_PORT_COUNT; local_port++) {
-        if (!current_neighbors[local_port].observed) {
+    printf("Sending LINK_STATE\n");
+    printf("Egress port: %lu\n", (unsigned long)local_port);
+    print_link_state(&entry->packet);
+}
+
+static void service_link_state_transmission(uint32_t local_port) {
+    LinkStateTransmissionState *transmission =
+        &link_state_transmissions[local_port];
+
+    if (!transmission->scan_requested || transmission->waiting_for_ack) {
+        return;
+    }
+
+    if (!neighbors[local_port].observed) {
+        transmission->scan_requested = false;
+        return;
+    }
+
+    transmission->scan_requested = false;
+    uint8_t port_mask = (uint8_t)(1u << local_port);
+
+    for (
+        size_t entry_index = 0;
+        entry_index < LINK_STATE_DATABASE_CAPACITY;
+        entry_index++
+    ) {
+        LinkStateDatabaseEntry *entry = &link_state_database[entry_index];
+
+        if (!entry->occupied) {
             continue;
         }
 
-        hard_assert(framed_uart_send(
-            &ports[local_port],
-            encoded_packet,
-            stream.bytes_written
-        ));
+        bool entry_is_known = (entry->known_by_ports & port_mask) != 0;
+        if (entry_is_known) {
+            continue;
+        }
+
+        send_link_state(entry, &framed_uarts[local_port], local_port);
+
+        transmission->waiting_for_ack = true;
+        memcpy(
+            transmission->pending_node_id,
+            entry->packet.source_node_id,
+            sizeof(transmission->pending_node_id)
+        );
+        transmission->pending_boot_id = entry->packet.boot_id;
+        transmission->pending_sequence = entry->packet.sequence;
+        return;
     }
 }
 
@@ -545,6 +655,7 @@ static bool handle_received_packet(
                 &node_identity,
                 &packet
             );
+            request_link_state_scans_for_observed_neighbors();
         }
 
         return false;
@@ -567,16 +678,17 @@ static bool handle_received_packet(
     ) != 0;
     bool remote_port_changed =
         neighbor->remote_port != packet.payload.hello.sender_port;
+    bool neighbor_discovered = !neighbor->observed;
     bool neighbor_replaced = neighbor->observed && node_id_changed;
     bool neighbor_restarted =
         neighbor->observed &&
         !node_id_changed &&
         neighbor->boot_id != packet.boot_id;
     bool adjacency_changed =
-        !neighbor->observed || node_id_changed || remote_port_changed;
+        neighbor_discovered || node_id_changed || remote_port_changed;
 
     const char *neighbor_event = NULL;
-    if (!neighbor->observed) {
+    if (neighbor_discovered) {
         neighbor_event = "Neighbor discovered";
     } else if (neighbor_replaced) {
         neighbor_event = "Neighbor replaced";
@@ -588,6 +700,7 @@ static bool handle_received_packet(
 
     if (neighbor_replaced || neighbor_restarted) {
         clear_link_state_knowledge(local_port);
+        reset_link_state_transmission(local_port);
     }
 
     memcpy(
@@ -602,6 +715,10 @@ static bool handle_received_packet(
 
     if (neighbor_event != NULL) {
         print_neighbor(neighbor_event, neighbor, local_port);
+    }
+
+    if (neighbor_discovered || neighbor_replaced || neighbor_restarted) {
+        request_link_state_scan(local_port);
     }
 
     return adjacency_changed;
@@ -627,6 +744,7 @@ static bool check_neighbor_timeouts(void) {
 
         print_neighbor("Neighbor disconnected", neighbor, local_port);
         clear_link_state_knowledge(local_port);
+        reset_link_state_transmission(local_port);
         neighbor->observed = false;
         adjacency_changed = true;
     }
@@ -768,11 +886,15 @@ int main (void) {
                 &node_identity,
                 neighbors
             );
-            send_link_state(
-                &link_state_database[LOCAL_LINK_STATE_INDEX],
-                framed_uarts,
-                neighbors
-            );
+            request_link_state_scans_for_observed_neighbors();
+        }
+
+        for (
+            uint32_t local_port = 0;
+            local_port < PIO_UART_PORT_COUNT;
+            local_port++
+        ) {
+            service_link_state_transmission(local_port);
         }
 
         tud_task(); // tinyusb device task

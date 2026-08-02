@@ -162,86 +162,86 @@ static void print_neighbor(
     const Neighbor *neighbor,
     uint32_t local_port
 ) {
-    printf("%s\n", event);
-    printf("Local port: %lu\n", (unsigned long)local_port);
-
-    printf("Node ID: ");
+    printf("%s on port %lu: ", event, (unsigned long)local_port);
     for (size_t i = 0; i < sizeof(neighbor->node_id); i++) {
         unsigned int node_id_byte = neighbor->node_id[i];
         printf("%02x", node_id_byte);
     }
 
-    printf("\nBoot ID: %08lx\n", (unsigned long)neighbor->boot_id);
-    printf("Remote port: %lu\n", (unsigned long)neighbor->remote_port);
+    printf(
+        " (boot %08lx, remote port %lu)\n\n",
+        (unsigned long)neighbor->boot_id,
+        (unsigned long)neighbor->remote_port
+    );
 }
 
 static void print_link_state(const NetworkPacket *packet) {
     const LinkState *link_state = &packet->payload.link_state;
 
-    printf("Origin node ID: ");
     for (size_t i = 0; i < sizeof(packet->source_node_id); i++) {
         unsigned int node_id_byte = packet->source_node_id[i];
         printf("%02x", node_id_byte);
     }
 
-    printf("\nBoot ID: %08lx\n", (unsigned long)packet->boot_id);
-    printf("Sequence: %lu\n", (unsigned long)packet->sequence);
     printf(
-        "Neighbor count: %lu\n",
-        (unsigned long)link_state->neighbors_count
+        " (boot %08lx, sequence %lu) -> [",
+        (unsigned long)packet->boot_id,
+        (unsigned long)packet->sequence
     );
 
     for (size_t i = 0; i < link_state->neighbors_count; i++) {
         const LinkStateNeighbor *neighbor = &link_state->neighbors[i];
 
-        printf("Neighbor %lu node ID: ", (unsigned long)i);
+        if (i > 0) {
+            printf(", ");
+        }
+
         for (size_t j = 0; j < sizeof(neighbor->node_id); j++) {
             unsigned int node_id_byte = neighbor->node_id[j];
             printf("%02x", node_id_byte);
         }
 
         printf(
-            "\nNeighbor %lu local port: %lu\n",
-            (unsigned long)i,
-            (unsigned long)neighbor->local_port
-        );
-        printf(
-            "Neighbor %lu remote port: %lu\n",
-            (unsigned long)i,
+            " (%lu->%lu)",
+            (unsigned long)neighbor->local_port,
             (unsigned long)neighbor->remote_port
         );
     }
+
+    printf("]\n\n");
 }
 
-static void print_ack(const NetworkPacket *packet, uint32_t local_port) {
+static void print_ack(
+    const char *event,
+    const NetworkPacket *packet,
+    uint32_t local_port
+) {
     const Ack *ack = &packet->payload.ack;
 
-    printf("Received ACK\n");
-    printf("Ingress port: %lu\n", (unsigned long)local_port);
-
-    printf("ACK sender node ID: ");
+    printf(
+        "%s on port %lu from ",
+        event,
+        (unsigned long)local_port
+    );
     for (size_t i = 0; i < sizeof(packet->source_node_id); i++) {
         unsigned int node_id_byte = packet->source_node_id[i];
         printf("%02x", node_id_byte);
     }
 
     printf(
-        "\nACK sender boot ID: %08lx\n",
+        " (boot %08lx)\n",
         (unsigned long)packet->boot_id
     );
 
-    printf("Acknowledged node ID: ");
+    printf("Acknowledged: ");
     for (size_t i = 0; i < sizeof(ack->acknowledged_node_id); i++) {
         unsigned int node_id_byte = ack->acknowledged_node_id[i];
         printf("%02x", node_id_byte);
     }
 
     printf(
-        "\nAcknowledged boot ID: %08lx\n",
-        (unsigned long)ack->acknowledged_boot_id
-    );
-    printf(
-        "Acknowledged sequence: %lu\n",
+        " (boot %08lx, sequence %lu)\n\n",
+        (unsigned long)ack->acknowledged_boot_id,
         (unsigned long)ack->acknowledged_sequence
     );
 }
@@ -305,7 +305,7 @@ static void clear_link_state_knowledge(uint32_t local_port) {
     }
 
     printf(
-        "LINK_STATE knowledge cleared for port %lu\n",
+        "LINK_STATE knowledge cleared for port %lu\n\n",
         (unsigned long)local_port
     );
 }
@@ -373,8 +373,6 @@ static void handle_received_ack(
     uint32_t local_port,
     const Neighbor *neighbor
 ) {
-    print_ack(packet, local_port);
-
     const Ack *ack = &packet->payload.ack;
     bool sender_node_id_matches = memcmp(
         packet->source_node_id,
@@ -395,7 +393,7 @@ static void handle_received_ack(
         entry->packet.sequence == ack->acknowledged_sequence;
 
     if (!sender_matches_neighbor || !acknowledged_version_matches) {
-        printf("ACK ignored\n");
+        print_ack("ACK ignored", packet, local_port);
         return;
     }
 
@@ -419,7 +417,7 @@ static void handle_received_ack(
     }
 
     request_link_state_scan(local_port);
-    printf("ACK accepted\n");
+    print_ack("ACK accepted", packet, local_port);
 }
 
 static bool store_received_link_state(
@@ -444,12 +442,12 @@ static bool store_received_link_state(
         ) {
             entry->known_by_ports |= ingress_port_mask;
             printf(
-                "Duplicate local LINK_STATE received on port %lu\n",
+                "Duplicate local LINK_STATE received on port %lu\n\n",
                 (unsigned long)local_port
             );
         } else {
             printf(
-                "Conflicting local LINK_STATE ignored on port %lu\n",
+                "Conflicting local LINK_STATE ignored on port %lu\n\n",
                 (unsigned long)local_port
             );
         }
@@ -462,7 +460,7 @@ static bool store_received_link_state(
 
         if (entry == NULL) {
             printf(
-                "LINK_STATE database full; packet ignored on port %lu\n",
+                "LINK_STATE database full; packet ignored on port %lu\n\n",
                 (unsigned long)local_port
             );
             return false;
@@ -472,8 +470,10 @@ static bool store_received_link_state(
         entry->occupied = true;
         entry->known_by_ports = ingress_port_mask;
 
-        printf("Remote LINK_STATE stored\n");
-        printf("Ingress port: %lu\n", (unsigned long)local_port);
+        printf(
+            "Remote LINK_STATE stored on port %lu\n",
+            (unsigned long)local_port
+        );
         print_link_state(&entry->packet);
         return true;
     }
@@ -481,7 +481,7 @@ static bool store_received_link_state(
     if (link_state_versions_match(packet, &entry->packet)) {
         entry->known_by_ports |= ingress_port_mask;
         printf(
-            "Duplicate LINK_STATE received on port %lu\n",
+            "Duplicate LINK_STATE received on port %lu\n\n",
             (unsigned long)local_port
         );
         return true;
@@ -489,7 +489,7 @@ static bool store_received_link_state(
 
     if (!link_state_version_is_newer(packet, &entry->packet)) {
         printf(
-            "Stale LINK_STATE ignored on port %lu\n",
+            "Stale LINK_STATE ignored on port %lu\n\n",
             (unsigned long)local_port
         );
         return true;
@@ -498,8 +498,10 @@ static bool store_received_link_state(
     entry->packet = *packet;
     entry->known_by_ports = ingress_port_mask;
 
-    printf("Remote LINK_STATE updated\n");
-    printf("Ingress port: %lu\n", (unsigned long)local_port);
+    printf(
+        "Remote LINK_STATE updated on port %lu\n",
+        (unsigned long)local_port
+    );
     print_link_state(&entry->packet);
 
     return true;
@@ -577,8 +579,10 @@ static void send_link_state(
         stream.bytes_written
     ));
 
-    printf("Sending LINK_STATE\n");
-    printf("Egress port: %lu\n", (unsigned long)local_port);
+    printf(
+        "Sending LINK_STATE on port %lu\n",
+        (unsigned long)local_port
+    );
     print_link_state(&entry->packet);
 }
 
@@ -639,7 +643,7 @@ static bool handle_received_packet(
 
     bool decoded = pb_decode(&stream, &NetworkPacket_msg, &packet);
     if (!decoded) {
-        printf("Failed to decode network packet\n");
+        printf("Failed to decode network packet\n\n");
         return false;
     }
 
@@ -667,7 +671,7 @@ static bool handle_received_packet(
     }
 
     if (packet.which_payload != NetworkPacket_hello_tag) {
-        printf("Unsupported network packet\n");
+        printf("Unsupported network packet\n\n");
         return false;
     }
 

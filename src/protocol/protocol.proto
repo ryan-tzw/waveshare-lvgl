@@ -14,6 +14,12 @@ message LinkState {
     repeated LinkStateNeighbor neighbors = 1;
 }
 
+message Ack {
+    bytes acknowledged_node_id = 1;
+    fixed32 acknowledged_boot_id = 2;
+    uint32 acknowledged_sequence = 3;
+}
+
 message NetworkPacket {
     bytes source_node_id = 1;
     fixed32 boot_id = 2;
@@ -22,5 +28,6 @@ message NetworkPacket {
     oneof payload {
         Hello hello = 4;
         LinkState link_state = 5;
+        Ack ack = 6;
     }
 }

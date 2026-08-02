@@ -123,13 +123,9 @@ static void print_neighbor(
     printf("Sequence: %lu\n", (unsigned long)neighbor->sequence);
 }
 
-static void print_local_link_state(
-    const LinkStateDatabaseEntry *entry
-) {
-    const NetworkPacket *packet = &entry->packet;
+static void print_link_state(const NetworkPacket *packet) {
     const LinkState *link_state = &packet->payload.link_state;
 
-    printf("Local LINK_STATE updated\n");
     printf("Origin node ID: ");
     for (size_t i = 0; i < sizeof(packet->source_node_id); i++) {
         unsigned int node_id_byte = packet->source_node_id[i];
@@ -207,7 +203,42 @@ static void update_local_link_state(
     entry->occupied = true;
     entry->known_by_ports = 0;
 
-    print_local_link_state(entry);
+    printf("Local LINK_STATE updated\n");
+    print_link_state(&entry->packet);
+}
+
+static void send_link_state(
+    const LinkStateDatabaseEntry *entry,
+    FramedUart *ports,
+    const Neighbor *current_neighbors
+) {
+    hard_assert(entry->occupied);
+    hard_assert(entry->packet.which_payload == NetworkPacket_link_state_tag);
+
+    uint8_t encoded_packet[NetworkPacket_size];
+    pb_ostream_t stream = pb_ostream_from_buffer(
+        encoded_packet,
+        sizeof(encoded_packet)
+    );
+
+    bool encoded = pb_encode(
+        &stream,
+        &NetworkPacket_msg,
+        &entry->packet
+    );
+    hard_assert(encoded);
+
+    for (uint32_t local_port = 0; local_port < PIO_UART_PORT_COUNT; local_port++) {
+        if (!current_neighbors[local_port].observed) {
+            continue;
+        }
+
+        hard_assert(framed_uart_send(
+            &ports[local_port],
+            encoded_packet,
+            stream.bytes_written
+        ));
+    }
 }
 
 static bool handle_received_packet(
@@ -222,6 +253,13 @@ static bool handle_received_packet(
     bool decoded = pb_decode(&stream, &NetworkPacket_msg, &packet);
     if (!decoded) {
         printf("Failed to decode network packet\n");
+        return false;
+    }
+
+    if (packet.which_payload == NetworkPacket_link_state_tag) {
+        printf("Received LINK_STATE\n");
+        printf("Ingress port: %lu\n", (unsigned long)local_port);
+        print_link_state(&packet);
         return false;
     }
 
@@ -427,6 +465,11 @@ int main (void) {
             update_local_link_state(
                 &local_link_state_entry,
                 &node_identity,
+                neighbors
+            );
+            send_link_state(
+                &local_link_state_entry,
+                framed_uarts,
                 neighbors
             );
         }

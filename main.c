@@ -41,6 +41,12 @@ typedef struct {
     uint64_t last_hello_time_us;
 } Neighbor;
 
+typedef struct {
+    bool occupied;
+    NetworkPacket packet;
+    uint8_t known_by_ports;
+} LinkStateDatabaseEntry;
+
 static const PioUartPinPair pio_uart_pin_pairs[PIO_UART_PORT_COUNT] = {
     {.tx_pin = 3, .rx_pin = 0},
     {.tx_pin = 4, .rx_pin = 10},
@@ -53,6 +59,7 @@ static PioUart pio_uarts[PIO_UART_PORT_COUNT] = {0};
 static FramedUart framed_uarts[PIO_UART_PORT_COUNT] = {0};
 static NodeIdentity node_identity = {0};
 static Neighbor neighbors[PIO_UART_PORT_COUNT] = {0};
+static LinkStateDatabaseEntry local_link_state_entry = {0};
 static const bool timing_output_enabled = false;
 
 static void send_hello(
@@ -116,7 +123,94 @@ static void print_neighbor(
     printf("Sequence: %lu\n", (unsigned long)neighbor->sequence);
 }
 
-static void handle_received_packet(
+static void print_local_link_state(
+    const LinkStateDatabaseEntry *entry
+) {
+    const NetworkPacket *packet = &entry->packet;
+    const LinkState *link_state = &packet->payload.link_state;
+
+    printf("Local LINK_STATE updated\n");
+    printf("Origin node ID: ");
+    for (size_t i = 0; i < sizeof(packet->source_node_id); i++) {
+        unsigned int node_id_byte = packet->source_node_id[i];
+        printf("%02x", node_id_byte);
+    }
+
+    printf("\nBoot ID: %08lx\n", (unsigned long)packet->boot_id);
+    printf("Sequence: %lu\n", (unsigned long)packet->sequence);
+    printf(
+        "Neighbor count: %lu\n",
+        (unsigned long)link_state->neighbors_count
+    );
+
+    for (size_t i = 0; i < link_state->neighbors_count; i++) {
+        const LinkStateNeighbor *neighbor = &link_state->neighbors[i];
+
+        printf("Neighbor %lu node ID: ", (unsigned long)i);
+        for (size_t j = 0; j < sizeof(neighbor->node_id); j++) {
+            unsigned int node_id_byte = neighbor->node_id[j];
+            printf("%02x", node_id_byte);
+        }
+
+        printf(
+            "\nNeighbor %lu local port: %lu\n",
+            (unsigned long)i,
+            (unsigned long)neighbor->local_port
+        );
+        printf(
+            "Neighbor %lu remote port: %lu\n",
+            (unsigned long)i,
+            (unsigned long)neighbor->remote_port
+        );
+    }
+}
+
+static void update_local_link_state(
+    LinkStateDatabaseEntry *entry,
+    NodeIdentity *identity,
+    const Neighbor *current_neighbors
+) {
+    NetworkPacket packet = NetworkPacket_init_zero;
+    memcpy(
+        packet.source_node_id,
+        identity->node_id.id,
+        sizeof(packet.source_node_id)
+    );
+    packet.boot_id = identity->boot_id;
+    packet.sequence = node_identity_next_sequence(identity);
+    packet.which_payload = NetworkPacket_link_state_tag;
+
+    LinkState *link_state = &packet.payload.link_state;
+
+    for (uint32_t local_port = 0; local_port < PIO_UART_PORT_COUNT; local_port++) {
+        const Neighbor *neighbor = &current_neighbors[local_port];
+
+        if (!neighbor->observed) {
+            continue;
+        }
+
+        pb_size_t entry_index = link_state->neighbors_count;
+        LinkStateNeighbor *link_state_neighbor =
+            &link_state->neighbors[entry_index];
+
+        memcpy(
+            link_state_neighbor->node_id,
+            neighbor->node_id,
+            sizeof(link_state_neighbor->node_id)
+        );
+        link_state_neighbor->local_port = local_port;
+        link_state_neighbor->remote_port = neighbor->remote_port;
+        link_state->neighbors_count++;
+    }
+
+    entry->packet = packet;
+    entry->occupied = true;
+    entry->known_by_ports = 0;
+
+    print_local_link_state(entry);
+}
+
+static bool handle_received_packet(
     const uint8_t *data,
     size_t length,
     uint32_t local_port,
@@ -128,29 +222,32 @@ static void handle_received_packet(
     bool decoded = pb_decode(&stream, &NetworkPacket_msg, &packet);
     if (!decoded) {
         printf("Failed to decode network packet\n");
-        return;
+        return false;
     }
 
     if (packet.which_payload != NetworkPacket_hello_tag) {
         printf("Unsupported network packet\n");
-        return;
+        return false;
     }
 
-    const char *neighbor_event = NULL;
+    bool node_id_changed = memcmp(
+        neighbor->node_id,
+        packet.source_node_id,
+        sizeof(neighbor->node_id)
+    ) != 0;
+    bool remote_port_changed =
+        neighbor->remote_port != packet.payload.hello.sender_port;
+    bool adjacency_changed =
+        !neighbor->observed || node_id_changed || remote_port_changed;
 
+    const char *neighbor_event = NULL;
     if (!neighbor->observed) {
         neighbor_event = "Neighbor discovered";
-    } else if (memcmp(
-            neighbor->node_id,
-            packet.source_node_id,
-            sizeof(neighbor->node_id)
-        ) != 0) {
+    } else if (node_id_changed) {
         neighbor_event = "Neighbor replaced";
     } else if (neighbor->boot_id != packet.boot_id) {
         neighbor_event = "Neighbor restarted";
-    } else if (
-        neighbor->remote_port != packet.payload.hello.sender_port
-    ) {
+    } else if (remote_port_changed) {
         neighbor_event = "Neighbor port changed";
     }
 
@@ -168,10 +265,13 @@ static void handle_received_packet(
     if (neighbor_event != NULL) {
         print_neighbor(neighbor_event, neighbor, local_port);
     }
+
+    return adjacency_changed;
 }
 
-static void check_neighbor_timeouts(void) {
+static bool check_neighbor_timeouts(void) {
     uint64_t current_time_us = time_us_64();
+    bool adjacency_changed = false;
 
     for (uint32_t local_port = 0; local_port < PIO_UART_PORT_COUNT; local_port++) {
         Neighbor *neighbor = &neighbors[local_port];
@@ -189,7 +289,10 @@ static void check_neighbor_timeouts(void) {
 
         print_neighbor("Neighbor disconnected", neighbor, local_port);
         neighbor->observed = false;
+        adjacency_changed = true;
     }
+
+    return adjacency_changed;
 }
 
 int main (void) {
@@ -251,6 +354,8 @@ int main (void) {
     uint32_t loop_count = 0;
 
     while (1) {
+        bool adjacency_changed = false;
+
         if (time_reached(next_hello_time)) {
             for (
                 uint32_t local_port = 0;
@@ -292,12 +397,16 @@ int main (void) {
                 &payload_length
             )) {
                 uint64_t packet_start_time_us = time_us_64();
-                handle_received_packet(
+                bool port_adjacency_changed = handle_received_packet(
                     payload,
                     payload_length,
                     local_port,
                     &neighbors[local_port]
                 );
+                if (port_adjacency_changed) {
+                    adjacency_changed = true;
+                }
+
                 uint64_t packet_elapsed_time_us =
                     time_us_64() - packet_start_time_us;
                 if (timing_output_enabled) {
@@ -310,7 +419,17 @@ int main (void) {
             }
         }
 
-        check_neighbor_timeouts();
+        if (check_neighbor_timeouts()) {
+            adjacency_changed = true;
+        }
+
+        if (adjacency_changed) {
+            update_local_link_state(
+                &local_link_state_entry,
+                &node_identity,
+                neighbors
+            );
+        }
 
         tud_task(); // tinyusb device task
         tud_cdc_write_flush();

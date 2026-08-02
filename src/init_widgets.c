@@ -9,9 +9,9 @@ static lv_obj_t *tile01;
 static lv_obj_t *tile02;
 
 // widgets
-static lv_obj_t *btn_hello;
+static lv_obj_t *btn_print_database;
 static lv_obj_t *writable_label;
-static bool hello_send_requested = false;
+static bool link_state_database_print_requested = false;
 
 // carousel stuff
 typedef struct {
@@ -33,7 +33,7 @@ static lv_obj_t *selected_button = NULL;
 
 // callbacks
 static void carousel_cb(lv_event_t *event);
-static void btn_hello_cb(lv_event_t *event);
+static void btn_print_database_cb(lv_event_t *event);
 
 void init_widgets(void) {
     // Create tileview and tiles
@@ -112,19 +112,19 @@ void init_widgets(void) {
         Row 1
     */
     // Tile 01
-    btn_hello = lv_btn_create(tile01);
+    btn_print_database = lv_btn_create(tile01);
     lv_obj_add_event_cb(
-        btn_hello,
-        btn_hello_cb,
+        btn_print_database,
+        btn_print_database_cb,
         LV_EVENT_CLICKED,
         NULL
     );
-    lv_obj_align(btn_hello, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_align(btn_print_database, LV_ALIGN_CENTER, 0, 0);
 
-    lv_obj_t *btn_hello_label = lv_label_create(btn_hello);
-    lv_label_set_text(btn_hello_label, "Send HELLO");
-    lv_obj_center(btn_hello_label);
-    lv_obj_add_style(btn_hello_label, &style_label, 0);
+    lv_obj_t *btn_print_database_label = lv_label_create(btn_print_database);
+    lv_label_set_text(btn_print_database_label, "Print database");
+    lv_obj_center(btn_print_database_label);
+    lv_obj_add_style(btn_print_database_label, &style_label, 0);
 
     /*
         Row 2
@@ -153,15 +153,15 @@ static void carousel_cb(lv_event_t *event) {
     lv_obj_add_state(target, LV_STATE_CHECKED);
 }
 
-static void btn_hello_cb(lv_event_t *event) {
-    hello_send_requested = true;
+static void btn_print_database_cb(lv_event_t *event) {
+    link_state_database_print_requested = true;
 }
 
-bool take_hello_send_request(void) {
-    bool send_requested = hello_send_requested;
-    hello_send_requested = false;
+bool take_link_state_database_print_request(void) {
+    bool print_requested = link_state_database_print_requested;
+    link_state_database_print_requested = false;
 
-    return send_requested;
+    return print_requested;
 }
 
 void write_to_label(const char buf[], uint32_t count) {

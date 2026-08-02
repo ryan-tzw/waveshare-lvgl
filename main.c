@@ -213,6 +213,43 @@ static void print_link_state(const NetworkPacket *packet) {
     printf("]\n\n");
 }
 
+static void print_link_state_database(void) {
+    size_t entry_count = 0;
+
+    for (
+        size_t entry_index = 0;
+        entry_index < LINK_STATE_DATABASE_CAPACITY;
+        entry_index++
+    ) {
+        if (link_state_database[entry_index].occupied) {
+            entry_count++;
+        }
+    }
+
+    printf(
+        "LINK_STATE database (%lu entries)\n",
+        (unsigned long)entry_count
+    );
+
+    if (entry_count == 0) {
+        printf("(empty)\n\n");
+        return;
+    }
+
+    for (
+        size_t entry_index = 0;
+        entry_index < LINK_STATE_DATABASE_CAPACITY;
+        entry_index++
+    ) {
+        const LinkStateDatabaseEntry *entry =
+            &link_state_database[entry_index];
+
+        if (entry->occupied) {
+            print_link_state(&entry->packet);
+        }
+    }
+}
+
 static void print_ack(
     const char *event,
     const NetworkPacket *packet,
@@ -854,18 +891,8 @@ int main (void) {
             next_hello_time = make_timeout_time_ms(HELLO_INTERVAL_MS);
         }
 
-        if (take_hello_send_request()) {
-            for (
-                uint32_t local_port = 0;
-                local_port < PIO_UART_PORT_COUNT;
-                local_port++
-            ) {
-                send_hello(
-                    &framed_uarts[local_port],
-                    &node_identity,
-                    local_port
-                );
-            }
+        if (take_link_state_database_print_request()) {
+            print_link_state_database();
         }
 
         for (

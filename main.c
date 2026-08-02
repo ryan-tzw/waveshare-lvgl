@@ -334,8 +334,8 @@ static bool check_neighbor_timeouts(void) {
 }
 
 int main (void) {
-    if (DEV_Module_Init() != 0) { return -1; } 
     hard_assert(node_identity_init(&node_identity));
+    if (DEV_Module_Init() != 0) { return -1; }
 
     for (uint32_t local_port = 0; local_port < PIO_UART_PORT_COUNT; local_port++) {
         uint32_t tx_pin = pio_uart_pin_pairs[local_port].tx_pin;

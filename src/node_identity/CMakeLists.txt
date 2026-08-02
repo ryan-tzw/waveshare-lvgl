@@ -7,6 +7,6 @@ target_include_directories(RP2350-Touch-LCD-2 PRIVATE
 )
 
 target_link_libraries(RP2350-Touch-LCD-2
+    hardware_flash
     pico_unique_id
-    pico_rand
 )

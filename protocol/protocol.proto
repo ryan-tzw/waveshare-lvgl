@@ -20,6 +20,8 @@ message Ack {
     uint32 acknowledged_sequence = 3;
 }
 
+message GatewayHello {}
+
 message NetworkPacket {
     bytes source_node_id = 1;
     fixed32 boot_id = 2;
@@ -29,5 +31,6 @@ message NetworkPacket {
         Hello hello = 4;
         LinkState link_state = 5;
         Ack ack = 6;
+        GatewayHello gateway_hello = 7;
     }
 }

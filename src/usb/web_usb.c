@@ -27,11 +27,14 @@ bool web_usb_take_connected_event(void) {
     return event_pending;
 }
 
+bool web_usb_can_send(void) {
+    return web_usb_connected && tx_length == 0;
+}
+
 bool web_usb_send(const uint8_t *payload, size_t length) {
-    if (!web_usb_connected) { return false; }
+    if (!web_usb_can_send()) { return false; }
     if (length > WEB_USB_MAX_PAYLOAD_SIZE) { return false; }
     if (length > 0 && payload == NULL) { return false; }
-    if (tx_length > 0) { return false; }
 
     uint16_t payload_length = (uint16_t)length;
     uint8_t low_byte = (uint8_t)payload_length;

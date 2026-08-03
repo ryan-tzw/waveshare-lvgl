@@ -27,19 +27,43 @@ function handleWebUsbMessage(message: Uint8Array) {
     try {
         const packet = fromBinary(NetworkPacketSchema, message);
 
-        if (packet.payload.case !== "gatewayHello") {
-            console.error("Unsupported WebUSB payload:", packet.payload.case);
-            return;
-        }
-
         if (packet.sourceNodeId.length !== 8) {
-            console.error("Gateway HELLO contains an invalid node ID");
+            console.error("WebUSB packet contains an invalid source node ID");
             return;
         }
 
         const nodeId = bytesToHex(packet.sourceNodeId);
         const bootId = packet.bootId.toString(16).padStart(8, "0");
-        console.log(`Gateway connected: ${nodeId} (boot ${bootId})`);
+
+        if (packet.payload.case === "gatewayHello") {
+            console.log(`Gateway connected: ${nodeId} (boot ${bootId})`);
+            return;
+        }
+
+        if (packet.payload.case === "linkState") {
+            const neighbors = packet.payload.value.neighbors;
+
+            for (const neighbor of neighbors) {
+                if (neighbor.nodeId.length !== 8) {
+                    console.error("LINK_STATE contains an invalid neighbor node ID");
+                    return;
+                }
+            }
+
+            const adjacencyList = neighbors
+                .map((neighbor) => {
+                    const neighborId = bytesToHex(neighbor.nodeId);
+                    return `${neighborId} (${neighbor.localPort}->${neighbor.remotePort})`;
+                })
+                .join(", ");
+
+            console.log(
+                `LINK_STATE received: ${nodeId} (boot ${bootId}, sequence ${packet.sequence}) -> [${adjacencyList}]`,
+            );
+            return;
+        }
+
+        console.error("Unsupported WebUSB payload:", packet.payload.case);
     } catch (error) {
         console.error("Could not decode WebUSB message:", error);
     }

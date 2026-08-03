@@ -833,6 +833,12 @@ void network_init(
             )
         );
     }
+
+    update_local_link_state(
+        &link_state_database[LOCAL_LINK_STATE_INDEX],
+        node_identity,
+        neighbors
+    );
 }
 
 void network_update(void) {

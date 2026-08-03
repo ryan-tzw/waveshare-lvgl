@@ -1,3 +1,4 @@
+#include "gateway.h"
 #include "init.h"
 #include "init_widgets.h"
 #include "network.h"
@@ -58,6 +59,7 @@ int main(void) {
         network_update();
 
         tud_task(); // tinyusb device task
+        gateway_update(&node_identity);
         web_usb_update();
         tud_cdc_write_flush();
         lv_task_handler();

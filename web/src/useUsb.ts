@@ -1,4 +1,7 @@
+import { fromBinary } from "@bufbuild/protobuf";
 import { useRef, useState } from "react";
+
+import { NetworkPacketSchema } from "./generated/protocol_pb";
 
 const isWebUsbSupported = "usb" in navigator;
 const usbVendorId = 0xcafe;
@@ -9,6 +12,38 @@ const vendorEndpointBufferSize = 64;
 const setControlLineStateRequest = 0x22;
 const maximumMessageLength = 240;
 const messageLengthSize = 2;
+
+function bytesToHex(bytes: Uint8Array) {
+    let hex = "";
+
+    for (const byte of bytes) {
+        hex += byte.toString(16).padStart(2, "0");
+    }
+
+    return hex;
+}
+
+function handleWebUsbMessage(message: Uint8Array) {
+    try {
+        const packet = fromBinary(NetworkPacketSchema, message);
+
+        if (packet.payload.case !== "gatewayHello") {
+            console.error("Unsupported WebUSB payload:", packet.payload.case);
+            return;
+        }
+
+        if (packet.sourceNodeId.length !== 8) {
+            console.error("Gateway HELLO contains an invalid node ID");
+            return;
+        }
+
+        const nodeId = bytesToHex(packet.sourceNodeId);
+        const bootId = packet.bootId.toString(16).padStart(8, "0");
+        console.log(`Gateway connected: ${nodeId} (boot ${bootId})`);
+    } catch (error) {
+        console.error("Could not decode WebUSB message:", error);
+    }
+}
 
 export function useUsb() {
     const deviceRef = useRef<USBDevice | null>(null);
@@ -65,7 +100,6 @@ export function useUsb() {
     }
 
     async function readFromDevice(device: USBDevice) {
-        const decoder = new TextDecoder();
         let receiveBuffer = new Uint8Array();
 
         try {
@@ -106,7 +140,7 @@ export function useUsb() {
                         if (receiveBuffer.length < frameLength) break;
 
                         const message = receiveBuffer.slice(messageLengthSize, frameLength);
-                        console.log(decoder.decode(message));
+                        handleWebUsbMessage(message);
 
                         receiveBuffer = receiveBuffer.slice(frameLength);
                     }

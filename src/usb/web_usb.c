@@ -8,21 +8,23 @@
 #define WEB_USB_LENGTH_SIZE 2
 #define WEB_USB_MAX_FRAME_SIZE (WEB_USB_LENGTH_SIZE + WEB_USB_MAX_PAYLOAD_SIZE)
 
-static const uint8_t connection_message[] = "WebUSB interface connected";
-
 static bool web_usb_connected = false;
+static bool connected_event_pending = false;
 static uint8_t tx_buffer[WEB_USB_MAX_FRAME_SIZE] = {0};
 static size_t tx_length = 0;
 static size_t tx_offset = 0;
 
 void web_usb_set_connected(bool connected) {
     web_usb_connected = connected;
+    connected_event_pending = connected;
     tx_length = 0;
     tx_offset = 0;
+}
 
-    if (connected) {
-        web_usb_send(connection_message, sizeof(connection_message) - 1);
-    }
+bool web_usb_take_connected_event(void) {
+    bool event_pending = connected_event_pending;
+    connected_event_pending = false;
+    return event_pending;
 }
 
 bool web_usb_send(const uint8_t *payload, size_t length) {

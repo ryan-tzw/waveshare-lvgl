@@ -1,6 +1,7 @@
-import { useCallback, useReducer } from "react";
+import { useReducer } from "react";
 
 import type { NetworkPacket } from "./generated/protocol_pb";
+import { deriveNetworkGraph, nodeIdToHex } from "./networkGraph";
 import { useUsb } from "./useUsb";
 
 type NetworkState = {
@@ -39,29 +40,19 @@ function networkReducer(state: NetworkState, action: NetworkAction): NetworkStat
     }
 }
 
-function bytesToHex(bytes: Uint8Array) {
-    let hex = "";
-
-    for (const byte of bytes) {
-        hex += byte.toString(16).padStart(2, "0");
-    }
-
-    return hex;
-}
-
 export function useNetwork() {
     const [state, dispatch] = useReducer(networkReducer, {
         gateway: null,
         linkStates: new Map(),
     });
 
-    const handlePacket = useCallback((packet: NetworkPacket) => {
+    const handlePacket = (packet: NetworkPacket) => {
         if (packet.sourceNodeId.length !== 8) {
             console.error("WebUSB packet contains an invalid source node ID");
             return;
         }
 
-        const nodeId = bytesToHex(packet.sourceNodeId);
+        const nodeId = nodeIdToHex(packet.sourceNodeId);
         const bootId = packet.bootId.toString(16).padStart(8, "0");
 
         switch (packet.payload.case) {
@@ -82,7 +73,7 @@ export function useNetwork() {
 
                 const adjacencyList = neighbors
                     .map((neighbor) => {
-                        const neighborId = bytesToHex(neighbor.nodeId);
+                        const neighborId = nodeIdToHex(neighbor.nodeId);
                         return `${neighborId} (${neighbor.localPort}->${neighbor.remotePort})`;
                     })
                     .join(", ");
@@ -97,9 +88,10 @@ export function useNetwork() {
                 console.error("Unsupported WebUSB payload:", packet.payload.case);
             }
         }
-    }, []);
+    };
 
     const usb = useUsb(handlePacket);
+    const graph = deriveNetworkGraph(state.gateway, state.linkStates);
 
     async function disconnectWebUsb() {
         try {
@@ -115,5 +107,6 @@ export function useNetwork() {
         disconnectWebUsb,
         gateway: state.gateway,
         linkStates: state.linkStates,
+        graph,
     };
 }

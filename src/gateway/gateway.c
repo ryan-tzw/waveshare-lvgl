@@ -59,15 +59,42 @@ static void send_next_database_packet(void) {
     database_scan_active = false;
 }
 
+static void send_next_database_update(void) {
+    if (!web_usb_can_send()) {
+        return;
+    }
+
+    size_t entry_index;
+    if (!network_take_link_state_database_update(&entry_index)) {
+        return;
+    }
+
+    NetworkPacket packet;
+    bool entry_exists = network_get_link_state_database_packet(
+        entry_index,
+        &packet
+    );
+    hard_assert(entry_exists);
+    hard_assert(packet.which_payload == NetworkPacket_link_state_tag);
+
+    send_packet(&packet);
+}
+
 void gateway_update(const NodeIdentity *identity) {
     hard_assert(identity != NULL);
 
     if (web_usb_take_connected_event()) {
+        network_clear_link_state_database_updates();
         send_gateway_hello(identity);
         database_scan_active = true;
         next_database_index = 0;
         return;
     }
 
-    send_next_database_packet();
+    if (database_scan_active) {
+        send_next_database_packet();
+        return;
+    }
+
+    send_next_database_update();
 }

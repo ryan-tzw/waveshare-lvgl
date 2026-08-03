@@ -73,14 +73,6 @@ void tud_vendor_rx_cb(uint8_t itf, uint8_t const* buffer, uint16_t bufsize) {
     }
 }
 
-void tud_cdc_rx_cb(uint8_t idx) {
-    while (tud_cdc_available()) {
-        char buf[64];
-        const uint32_t count = tud_cdc_read(buf, sizeof(buf));
-        write_to_label(buf, count);
-    }
-}
-
 // Invoked when cdc line state changed e.g connected/disconnected
 void tud_cdc_line_state_cb(uint8_t itf, bool dtr, bool rts) {
     // if connected, print initial message

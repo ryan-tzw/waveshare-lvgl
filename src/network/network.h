@@ -19,3 +19,5 @@ bool network_get_link_state_database_packet(
     size_t entry_index,
     NetworkPacket *packet
 );
+bool network_take_link_state_database_update(size_t *entry_index);
+void network_clear_link_state_database_updates(void);

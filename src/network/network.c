@@ -36,9 +36,10 @@ typedef struct {
 } Neighbor;
 
 typedef struct {
-    bool occupied;
     NetworkPacket packet;
     uint8_t known_by_ports;
+    bool occupied;
+    bool update_pending;
 } LinkStateDatabaseEntry;
 
 typedef struct {
@@ -495,6 +496,7 @@ static bool store_received_link_state(
         entry->packet = *packet;
         entry->occupied = true;
         entry->known_by_ports = ingress_port_mask;
+        entry->update_pending = true;
 
         printf(
             "Remote LINK_STATE stored on port %lu\n",
@@ -523,6 +525,7 @@ static bool store_received_link_state(
 
     entry->packet = *packet;
     entry->known_by_ports = ingress_port_mask;
+    entry->update_pending = true;
 
     printf(
         "Remote LINK_STATE updated on port %lu\n",
@@ -574,6 +577,7 @@ static void update_local_link_state(
     entry->packet = packet;
     entry->occupied = true;
     entry->known_by_ports = 0;
+    entry->update_pending = true;
 
     printf("Local LINK_STATE updated\n");
     print_link_state(&entry->packet);
@@ -854,6 +858,41 @@ bool network_get_link_state_database_packet(
 
     *packet = entry->packet;
     return true;
+}
+
+bool network_take_link_state_database_update(size_t *entry_index) {
+    if (entry_index == NULL) {
+        return false;
+    }
+
+    for (
+        size_t current_index = 0;
+        current_index < NETWORK_LINK_STATE_DATABASE_CAPACITY;
+        current_index++
+    ) {
+        LinkStateDatabaseEntry *entry =
+            &link_state_database[current_index];
+
+        if (!entry->update_pending) {
+            continue;
+        }
+
+        entry->update_pending = false;
+        *entry_index = current_index;
+        return true;
+    }
+
+    return false;
+}
+
+void network_clear_link_state_database_updates(void) {
+    for (
+        size_t entry_index = 0;
+        entry_index < NETWORK_LINK_STATE_DATABASE_CAPACITY;
+        entry_index++
+    ) {
+        link_state_database[entry_index].update_pending = false;
+    }
 }
 
 void network_init(

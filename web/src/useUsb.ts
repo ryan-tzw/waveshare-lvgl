@@ -1,7 +1,7 @@
 import { fromBinary } from "@bufbuild/protobuf";
 import { useRef, useState } from "react";
 
-import { NetworkPacketSchema } from "./generated/protocol_pb";
+import { type NetworkPacket, NetworkPacketSchema } from "./generated/protocol_pb";
 
 const isWebUsbSupported = "usb" in navigator;
 const usbVendorId = 0xcafe;
@@ -13,63 +13,16 @@ const setControlLineStateRequest = 0x22;
 const maximumMessageLength = 240;
 const messageLengthSize = 2;
 
-function bytesToHex(bytes: Uint8Array) {
-    let hex = "";
-
-    for (const byte of bytes) {
-        hex += byte.toString(16).padStart(2, "0");
-    }
-
-    return hex;
-}
-
-function handleWebUsbMessage(message: Uint8Array) {
+function handleWebUsbMessage(message: Uint8Array, onPacket: (packet: NetworkPacket) => void) {
     try {
         const packet = fromBinary(NetworkPacketSchema, message);
-
-        if (packet.sourceNodeId.length !== 8) {
-            console.error("WebUSB packet contains an invalid source node ID");
-            return;
-        }
-
-        const nodeId = bytesToHex(packet.sourceNodeId);
-        const bootId = packet.bootId.toString(16).padStart(8, "0");
-
-        if (packet.payload.case === "gatewayHello") {
-            console.log(`Gateway connected: ${nodeId} (boot ${bootId})`);
-            return;
-        }
-
-        if (packet.payload.case === "linkState") {
-            const neighbors = packet.payload.value.neighbors;
-
-            for (const neighbor of neighbors) {
-                if (neighbor.nodeId.length !== 8) {
-                    console.error("LINK_STATE contains an invalid neighbor node ID");
-                    return;
-                }
-            }
-
-            const adjacencyList = neighbors
-                .map((neighbor) => {
-                    const neighborId = bytesToHex(neighbor.nodeId);
-                    return `${neighborId} (${neighbor.localPort}->${neighbor.remotePort})`;
-                })
-                .join(", ");
-
-            console.log(
-                `LINK_STATE received: ${nodeId} (boot ${bootId}, sequence ${packet.sequence}) -> [${adjacencyList}]`,
-            );
-            return;
-        }
-
-        console.error("Unsupported WebUSB payload:", packet.payload.case);
+        onPacket(packet);
     } catch (error) {
         console.error("Could not decode WebUSB message:", error);
     }
 }
 
-export function useUsb() {
+export function useUsb(onPacket: (packet: NetworkPacket) => void) {
     const deviceRef = useRef<USBDevice | null>(null);
     const readPromiseRef = useRef<Promise<void> | null>(null);
     const keepReadingRef = useRef(false);
@@ -164,7 +117,7 @@ export function useUsb() {
                         if (receiveBuffer.length < frameLength) break;
 
                         const message = receiveBuffer.slice(messageLengthSize, frameLength);
-                        handleWebUsbMessage(message);
+                        handleWebUsbMessage(message, onPacket);
 
                         receiveBuffer = receiveBuffer.slice(frameLength);
                     }

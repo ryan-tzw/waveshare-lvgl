@@ -11,6 +11,10 @@
 #include <string.h>
 
 
+/* ==========================================================================
+   Network configuration and state
+   ========================================================================== */
+
 #define PIO_UART_BAUD 115200
 #define PIO_UART_PORT_COUNT 4
 #define HELLO_INTERVAL_MS 500
@@ -66,6 +70,10 @@ static bool timing_output_enabled = false;
 static bool hello_schedule_started = false;
 static absolute_time_t next_hello_time;
 static uint8_t received_payload[FRAMED_UART_MAX_PAYLOAD_SIZE];
+
+/* ==========================================================================
+   Basic packet transmission
+   ========================================================================== */
 
 static void send_hello(
     FramedUart *framed_uart,
@@ -149,6 +157,10 @@ static void send_ack(
         stream.bytes_written
     ));
 }
+
+/* ==========================================================================
+   Diagnostic output
+   ========================================================================== */
 
 static void print_neighbor(
     const char *event,
@@ -276,6 +288,10 @@ static void print_ack(
     );
 }
 
+/* ==========================================================================
+   LINK_STATE database lookup and knowledge
+   ========================================================================== */
+
 static LinkStateDatabaseEntry *find_link_state_entry(
     const uint8_t *source_node_id
 ) {
@@ -339,6 +355,10 @@ static void clear_link_state_knowledge(uint32_t local_port) {
         (unsigned long)local_port
     );
 }
+
+/* ==========================================================================
+   LINK_STATE synchronization
+   ========================================================================== */
 
 static void reset_link_state_transmission(uint32_t local_port) {
     link_state_transmissions[local_port] = (LinkStateTransmissionState){0};
@@ -682,6 +702,10 @@ static void service_link_state_transmission(uint32_t local_port) {
     }
 }
 
+/* ==========================================================================
+   Packet reception and neighbour lifecycle
+   ========================================================================== */
+
 static bool handle_received_packet(
     const uint8_t *data,
     size_t length,
@@ -805,6 +829,10 @@ static bool check_neighbor_timeouts(void) {
 
     return adjacency_changed;
 }
+
+/* ==========================================================================
+   Public network interface
+   ========================================================================== */
 
 void network_init(
     NodeIdentity *identity,

@@ -1,0 +1,6 @@
+/* The final flash sector is reserved for the append-only boot-ID journal. */
+ASSERT(
+    __flash_binary_end <=
+        0x10000000 + (@PICO_FLASH_SIZE_BYTES@) - @BOOT_ID_JOURNAL_SIZE_BYTES@,
+    "ERROR: firmware image overlaps the boot-ID journal"
+)

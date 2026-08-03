@@ -1,0 +1,75 @@
+#include "web_usb.h"
+
+#include "tusb.h"
+
+#include <string.h>
+
+
+#define WEB_USB_LENGTH_SIZE 2
+#define WEB_USB_MAX_FRAME_SIZE (WEB_USB_LENGTH_SIZE + WEB_USB_MAX_PAYLOAD_SIZE)
+
+static const uint8_t connection_message[] = "WebUSB interface connected";
+
+static bool web_usb_connected = false;
+static uint8_t tx_buffer[WEB_USB_MAX_FRAME_SIZE] = {0};
+static size_t tx_length = 0;
+static size_t tx_offset = 0;
+
+void web_usb_set_connected(bool connected) {
+    web_usb_connected = connected;
+    tx_length = 0;
+    tx_offset = 0;
+
+    if (connected) {
+        web_usb_send(connection_message, sizeof(connection_message) - 1);
+    }
+}
+
+bool web_usb_send(const uint8_t *payload, size_t length) {
+    if (!web_usb_connected) { return false; }
+    if (length > WEB_USB_MAX_PAYLOAD_SIZE) { return false; }
+    if (length > 0 && payload == NULL) { return false; }
+    if (tx_length > 0) { return false; }
+
+    uint16_t payload_length = (uint16_t)length;
+    uint8_t low_byte = (uint8_t)payload_length;
+    uint8_t high_byte = (uint8_t)(payload_length >> 8);
+
+    tx_buffer[0] = low_byte;
+    tx_buffer[1] = high_byte;
+
+    if (length > 0) {
+        memcpy(&tx_buffer[WEB_USB_LENGTH_SIZE], payload, length);
+    }
+
+    tx_length = WEB_USB_LENGTH_SIZE + length;
+    tx_offset = 0;
+    return true;
+}
+
+void web_usb_update(void) {
+    if (!web_usb_connected) { return; }
+    if (tx_length == 0) { return; }
+
+    uint32_t available_space = tud_vendor_write_available();
+    if (available_space == 0) { return; }
+
+    size_t remaining_length = tx_length - tx_offset;
+    size_t write_length = remaining_length;
+
+    if (write_length > available_space) {
+        write_length = available_space;
+    }
+
+    uint32_t written = tud_vendor_write(&tx_buffer[tx_offset], write_length);
+    tx_offset += written;
+
+    if (written > 0) {
+        tud_vendor_write_flush();
+    }
+
+    if (tx_offset == tx_length) {
+        tx_length = 0;
+        tx_offset = 0;
+    }
+}

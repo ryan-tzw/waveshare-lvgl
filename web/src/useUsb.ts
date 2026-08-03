@@ -7,6 +7,8 @@ const vendorInterfaceNumber = 2;
 const vendorEndpointNumber = 3;
 const vendorEndpointBufferSize = 64;
 const setControlLineStateRequest = 0x22;
+const maximumMessageLength = 240;
+const messageLengthSize = 2;
 
 export function useUsb() {
     const deviceRef = useRef<USBDevice | null>(null);
@@ -64,6 +66,7 @@ export function useUsb() {
 
     async function readFromDevice(device: USBDevice) {
         const decoder = new TextDecoder();
+        let receiveBuffer = new Uint8Array();
 
         try {
             while (keepReadingRef.current) {
@@ -77,7 +80,36 @@ export function useUsb() {
                 }
 
                 if (result.data) {
-                    console.log(decoder.decode(result.data));
+                    const receivedBytes = new Uint8Array(
+                        result.data.buffer,
+                        result.data.byteOffset,
+                        result.data.byteLength,
+                    );
+                    const combinedBuffer = new Uint8Array(
+                        receiveBuffer.length + receivedBytes.length,
+                    );
+
+                    combinedBuffer.set(receiveBuffer);
+                    combinedBuffer.set(receivedBytes, receiveBuffer.length);
+                    receiveBuffer = combinedBuffer;
+
+                    while (receiveBuffer.length >= messageLengthSize) {
+                        const lowByte = receiveBuffer[0];
+                        const highByte = receiveBuffer[1];
+                        const messageLength = (highByte << 8) | lowByte;
+
+                        if (messageLength > maximumMessageLength) {
+                            throw new Error(`WebUSB message is too large: ${messageLength} bytes`);
+                        }
+
+                        const frameLength = messageLengthSize + messageLength;
+                        if (receiveBuffer.length < frameLength) break;
+
+                        const message = receiveBuffer.slice(messageLengthSize, frameLength);
+                        console.log(decoder.decode(message));
+
+                        receiveBuffer = receiveBuffer.slice(frameLength);
+                    }
                 }
             }
         } catch (error) {

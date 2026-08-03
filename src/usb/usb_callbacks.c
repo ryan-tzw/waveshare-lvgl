@@ -1,6 +1,7 @@
 #include "init_widgets.h"
 #include "tusb.h"
 #include "usb_descriptors.h"
+#include "web_usb.h"
 
 #include <string.h>
 
@@ -12,8 +13,6 @@
 //     .bScheme         = 1, // 0: http, 1: https
 //     .url             = URL
 // };
-
-static bool web_usb_connected = false;
 
 // Invoked when a control transfer occurred on an interface of this class
 // Driver response accordingly to the request and the transfer stage (setup/data/ack)
@@ -47,12 +46,7 @@ bool tud_vendor_control_xfer_cb(uint8_t rhport, uint8_t stage, tusb_control_requ
         case TUSB_REQ_TYPE_CLASS: {
             if (request->bRequest == 0x22) {
                 // Webserial simulate the CDC_REQUEST_SET_CONTROL_LINE_STATE (0x22) to connect and disconnect.
-                web_usb_connected = (request->wValue != 0);
-
-                if (web_usb_connected) {
-                    tud_vendor_write_str("\r\nWebUSB interface connected\r\n");
-                    tud_vendor_write_flush();
-                }
+                web_usb_set_connected(request->wValue != 0);
                 // response with status OK
                 return tud_control_status(rhport, request);
             }

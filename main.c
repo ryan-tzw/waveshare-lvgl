@@ -4,6 +4,7 @@
 #include "node_identity.h"
 #include "pico/time.h"
 #include "tusb.h"
+#include "web_usb.h"
 
 
 #define TIMING_REPORT_INTERVAL_MS 1000
@@ -57,6 +58,7 @@ int main(void) {
         network_update();
 
         tud_task(); // tinyusb device task
+        web_usb_update();
         tud_cdc_write_flush();
         lv_task_handler();
 

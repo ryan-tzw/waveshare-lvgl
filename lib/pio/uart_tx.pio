@@ -48,10 +48,15 @@ static inline void uart_tx_program_init(PIO pio, uint sm, uint offset, uint pin_
 
     pio_sm_init(pio, sm, offset, &c);
     pio_sm_set_enabled(pio, sm, true);
+
+    gpio_set_drive_strength(pin_tx, GPIO_DRIVE_STRENGTH_4MA);
+    // gpio_disable_pulls(pin_tx);
+    // gpio_set_slew_rate(pin_tx, GPIO_SLEW_RATE_SLOW);
 }
 
 static inline void uart_tx_program_putc(PIO pio, uint sm, char c) {
     pio_sm_put_blocking(pio, sm, (uint32_t)c);
+    // sleep_us(5);
 }
 
 static inline void uart_tx_program_puts(PIO pio, uint sm, const char *s) {

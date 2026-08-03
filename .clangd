@@ -1,0 +1,8 @@
+Diagnostics:
+  UnusedIncludes: Strict
+
+CompileFlags:
+  Add:
+    - -Wall
+    - -Wextra
+    - -Wunused-variable

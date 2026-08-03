@@ -1,117 +1,212 @@
 #include "pio.h"
 
+#include <stdio.h>
+#include <stdlib.h>
+
+#include "logging.h"
+#include "uart_rx.pio.h"
+#include "uart_tx.pio.h"
+
 #define DMA_IRQ_PRIORITY PICO_SHARED_IRQ_HANDLER_DEFAULT_ORDER_PRIORITY
 
-// TODO: We should be able to attach more than 2 callbacks on every PIO despite having only 2 IRQ lines. Right now we are panicking if we cant attach more than 2 callbacks as exclusive handlers to a PIO. 
+void uart_rx_pio_on_gpio(UART_RX_CONFIG *uart_rx_config) {
+  if (uart_rx_config->pin >= NUM_BANK0_GPIOS)
+    panic("Attempting to use a pin>=32 on a platform that does not support it");
 
-static int8_t get_other_pio_irq(int8_t pio_irq) { 
-    /**
-     * Only 15-20 IRQ and 2 IRQ for every PIO even though 4 SM
-     * Section 15.1 of https://pico.implrust.com/interrupts/interrupts-in-rp2350.html
-     */
-    if ((pio_irq < 15) || (pio_irq > 20)) {
-        panic("Unknown PIO IRQ %d", pio_irq);
-    }
-    if (pio_irq % 2 == 0) {
-        return pio_irq - 1;
-    } else {
-        return pio_irq + 1;
-    }
+  // Load the UART RX program into PIO, then assign the GPIO pin
+  if (pio_sm_is_claimed(uart_rx_config->pio, uart_rx_config->sm)) {
+    panic("uart_rx_pio_on_gpio: PIO %d sm %u already claimed",
+          uart_rx_config->pio, uart_rx_config->sm);
+  }
+  pio_sm_claim(uart_rx_config->pio, uart_rx_config->sm);
+  uart_rx_config->offset =
+      pio_add_program(uart_rx_config->pio, &uart_rx_program);
+  if (uart_rx_config->pin >= 16) {
+    pio_set_gpio_base(uart_rx_config->pio, 16);
+  } else {
+    pio_set_gpio_base(uart_rx_config->pio, 0);
+  }
+  uart_rx_program_init(uart_rx_config->pio, uart_rx_config->sm,
+                       uart_rx_config->offset, uart_rx_config->pin,
+                       SERIAL_BAUD);
+
+  // Use DMA
+  uart_rx_config->dma_channel_rx = dma_claim_unused_channel(true);
+  uart_rx_config->dma_channel_rx_config =
+      dma_channel_get_default_config(uart_rx_config->dma_channel_rx);
+  channel_config_set_transfer_data_size(&uart_rx_config->dma_channel_rx_config,
+                                        DMA_SIZE_8);
+  channel_config_set_read_increment(&uart_rx_config->dma_channel_rx_config,
+                                    false);
+  channel_config_set_write_increment(&uart_rx_config->dma_channel_rx_config,
+                                     true);
+  channel_config_set_dreq(
+      &uart_rx_config->dma_channel_rx_config,
+      pio_get_dreq(uart_rx_config->pio, uart_rx_config->sm, false));
+  channel_config_set_ring(&uart_rx_config->dma_channel_rx_config, true,
+                          8); // true  = wrap write address;
+  dma_channel_configure(
+      uart_rx_config->dma_channel_rx, &uart_rx_config->dma_channel_rx_config,
+      uart_rx_config->dma_buffer_rx,
+      (io_rw_8 *)&uart_rx_config->pio->rxf[uart_rx_config->sm] + 3,
+      dma_encode_endless_transfer_count(), true);
+
+  LOG_INFO("uart_rx_pio_on_gpio: Installed UART RX program on %u, %d, %u (sm, "
+           "pio, pin)",
+           uart_rx_config->sm, uart_rx_config->pio, uart_rx_config->pin);
 }
 
-void uart_rx_pio_irq_func(UART_RX_CONFIG* uart_rx_config) {
-    while(!pio_sm_is_rx_fifo_empty(uart_rx_config->pio, uart_rx_config->sm)) {
-        char c = uart_rx_program_getc(uart_rx_config->pio, uart_rx_config->sm);
-        if (!queue_try_add(&uart_rx_config->fifo, &c)) {
-            panic("fifo full");
-        }
-    }
-    // Tell the async worker that there are some characters waiting for us
-    async_context_set_work_pending(&uart_rx_config->async_context.core, &uart_rx_config->worker);
+bool dma_chan_has_unprocessed_data(UART_RX_CONFIG *uart_rx_cfg) {
+  dma_channel_hw_t *dma_chan = dma_channel_hw_addr(uart_rx_cfg->dma_channel_rx);
+
+  uint32_t head =
+      (dma_chan->write_addr - (uintptr_t)uart_rx_cfg->dma_buffer_rx) &
+      (DMA_BUFFER_CAPACITY - 1);
+
+  return head != uart_rx_cfg->dma_buffer_rx_head;
 }
 
-void uart_rx_pio_on_gpio(UART_RX_CONFIG* uart_rx_config) {
-    if (uart_rx_config->pin >= NUM_BANK0_GPIOS)
-        panic("Attempting to use a pin>=32 on a platform that does not support it"); 
+void uart_tx_pio_on_gpio(UART_TX_CONFIG *uart_tx_config) {
+  mutex_init(&uart_tx_config->mutex);
 
-    // create a queue so the irq can save the data somewhere
-    queue_init(&uart_rx_config->fifo, 1, UART_FIFO_QUEUE_SIZE_BYTES); // Queue has 128 members capacity with each member at 1 byte
-
-    // Setup an async context and worker to perform work when needed
-    if (!async_context_threadsafe_background_init_with_defaults(&uart_rx_config->async_context)) {
-        panic("failed to setup context");
-    }
-    async_context_add_when_pending_worker(&uart_rx_config->async_context.core, &uart_rx_config->worker);
-
-    // Find a PIO and load the UART RX program into it, then assign the GPIO pin to it 
-    bool success = pio_claim_free_sm_and_add_program_for_gpio_range(&uart_rx_program, &uart_rx_config->pio, &uart_rx_config->sm, &uart_rx_config->offset, uart_rx_config->pin, 1, true);
-    hard_assert(success);
-    uart_rx_program_init(uart_rx_config->pio, uart_rx_config->sm, uart_rx_config->offset, uart_rx_config->pin, SERIAL_BAUD);
-
-    // Find a free irq
-    // int8_t pio_irq = pio_get_irq_num(uart_rx_config->pio, 0);
-    // irq_handler_t irq_handler = irq_get_exclusive_handler(pio_irq);
-    // if (irq_handler == NULL) {
-    //     // Enable interrupt
-    //     irq_set_exclusive_handler(pio_irq, pio_exclusive_handler);
-    //     // irq_add_shared_handler(pio_irq, uart_rx_config->pio_irq_func_wrapper, PICO_SHARED_IRQ_HANDLER_DEFAULT_ORDER_PRIORITY); // Add a shared IRQ handler
-    //     irq_set_enabled(pio_irq, true); // Enable the IRQ
-    //     const uint irq_index = pio_irq - pio_get_irq_num(uart_rx_config->pio, 0); // Get index of the IRQ
-    //     pio_set_irqn_source_enabled(uart_rx_config->pio, irq_index, pio_get_rx_fifo_not_empty_interrupt_source(uart_rx_config->sm), true); // Set pio to tell us when the FIFO is NOT empty
-    // } 
-    // if (irq_handler != NULL && irq_handler != pio_exclusive_handler) {
-    //     panic("IRQ %d for SM %d PIO %d is in use by another exclusive handler", pio_irq, uart_rx_config->sm, uart_rx_config->pio);
-    // }
-    // if (uart_rx_programs >= MAX_UART_RX_PROGRAMS) {
-    //     panic("Too many UART RX IRQ handlers");
-    // }
-    // uart_rx_pio_irq_func_wrappers[uart_rx_programs++] = uart_rx_config->pio_irq_func_wrapper;
-
-    // Find a free irq
-    int8_t pio_irq = pio_get_irq_num(uart_rx_config->pio, 0);
-    if (irq_get_exclusive_handler(pio_irq)) {
-        pio_irq = get_other_pio_irq(pio_irq);
-        if (irq_get_exclusive_handler(pio_irq)) {
-            panic("uart_rx_pio_on_gpio: All IRQ in use");
-        }
-    }
-    // Enable interrupt
-    irq_set_exclusive_handler(pio_irq, uart_rx_config->pio_irq_func_wrapper);
-    irq_set_enabled(pio_irq, true); // Enable the IRQ
-    uint irq_index;
-    if (pio_irq > get_other_pio_irq(pio_irq)) {
-        irq_index = 1;
-    } else {
-        irq_index = 0;
-    }
-    pio_set_irqn_source_enabled(uart_rx_config->pio, irq_index, pio_get_rx_fifo_not_empty_interrupt_source(uart_rx_config->sm), true); // Set pio to tell us when the FIFO is NOT empty
-    printf("uart_rx_pio_on_gpio: Installed UART RX program on %u, %d, %u, %d (sm, pio, pin, IRQ)\n", uart_rx_config->sm, uart_rx_config->pio, uart_rx_config->pin, pio_irq);
-
-    char buffer_tx[] = "the quick brown fox jumps over the lazy dog";
-    char buffer_rx[sizeof(buffer_tx) - 1] = {0};
-    
-    // uint dma_channel_rx = dma_claim_unused_channel(true);
-    // dma_channel_config config_rx = dma_channel_get_default_config(dma_channel_rx);
-    // channel_config_set_transfer_data_size(&config_rx, DMA_SIZE_8);
-    // channel_config_set_read_increment(&config_rx, false);
-    // channel_config_set_write_increment(&config_rx, true);
-    // uint32_t read_size = sizeof(buffer_tx) - 1;
-    // // enable irq for rx
-    // dma_irqn_set_channel_enabled(0, dma_channel_rx, true); // DMA IRQ to use from 0 to 3
-    // // setup dma to read from pio fifo
-    // channel_config_set_dreq(&config_rx, pio_get_dreq(pio_hw_rx, pio_sm_rx, false));
-    // // 8-bit read from the uppermost byte of the FIFO, as data is left-justified so need to add 3. Don't forget the cast!
-    // dma_channel_configure(dma_channel_rx, &config_rx, buffer_rx, (io_rw_8*)&pio_hw_rx->rxf[pio_sm_rx] + 3, read_size, true); // dma started
-    // uint dma_channel_tx = 0;
-    // printf("nothing fucked up\n");
+  // Load the UART TX program into PIO, then assign the GPIO pin
+  if (pio_sm_is_claimed(uart_tx_config->pio, uart_tx_config->sm)) {
+    panic("uart_rx_pio_on_gpio: PIO %d sm %u already claimed",
+          uart_tx_config->pio, uart_tx_config->sm);
+  }
+  pio_sm_claim(uart_tx_config->pio, uart_tx_config->sm);
+  uart_tx_config->offset =
+      pio_add_program(uart_tx_config->pio, &uart_tx_program);
+  if (uart_tx_config->pin >= 16) {
+    pio_set_gpio_base(uart_tx_config->pio, 16);
+  } else {
+    pio_set_gpio_base(uart_tx_config->pio, 0);
+  }
+  uart_tx_program_init(uart_tx_config->pio, uart_tx_config->sm,
+                       uart_tx_config->offset, uart_tx_config->pin,
+                       SERIAL_BAUD);
+  pio_sm_set_enabled(uart_tx_config->pio, uart_tx_config->sm, true);
+  // uart_tx_config->dma_channel_tx = dma_claim_unused_channel(true);
+  // uart_tx_config->dma_channel_tx_config =
+  //     dma_channel_get_default_config(uart_tx_config->dma_channel_tx);
+  // channel_config_set_transfer_data_size(&uart_tx_config->dma_channel_tx_config,
+  //                                       DMA_SIZE_8);
+  // channel_config_set_read_increment(&uart_tx_config->dma_channel_tx_config,
+  //                                   true);
+  // channel_config_set_write_increment(&uart_tx_config->dma_channel_tx_config,
+  //                                    false);
+  // channel_config_set_dreq(
+  //     &uart_tx_config->dma_channel_tx_config,
+  //     pio_get_dreq(uart_tx_config->pio, uart_tx_config->sm, true));
+  // irq_set_exclusive_handler(dma_get_irq_num(uart_tx_config->dma_irq_index),
+  //                           uart_tx_config->dma_irq_handler_wrapper);
+  // irq_set_enabled(dma_get_irq_num(uart_tx_config->dma_irq_index), true);
+  // dma_irqn_set_channel_enabled(uart_tx_config->dma_irq_index,
+  //                              uart_tx_config->dma_channel_tx, true);
+  LOG_INFO(
+      "uart_tx_pio_on_gpio: Installed UART TX program on %u, %d, %u (sm, pio, "
+      "pin)",
+      uart_tx_config->sm, uart_tx_config->pio, uart_tx_config->pin);
 }
 
-void uart_tx_pio_on_gpio(UART_TX_CONFIG* uart_tx_config) {
-    mutex_init(&uart_tx_config->mutex);
-    // Find a PIO and load the UART TX program into it, then assign the GPIO pin to it 
-    bool success = pio_claim_free_sm_and_add_program_for_gpio_range(&uart_tx_program, &uart_tx_config->pio, &uart_tx_config->sm, &uart_tx_config->offset, uart_tx_config->pin, 1, true);
-    hard_assert(success);
-    uart_tx_program_init(uart_tx_config->pio, uart_tx_config->sm, uart_tx_config->offset, uart_tx_config->pin, SERIAL_BAUD);
+bool queue_into_data_into_dma_buffer(UART_TX_CONFIG *uart_tx_config,
+                                     uint8_t *data, size_t len) {
+  uint used;
+  if (uart_tx_config->dma_buffer_tx_head > uart_tx_config->dma_buffer_tx_tail)
+    used =
+        uart_tx_config->dma_buffer_tx_head - uart_tx_config->dma_buffer_tx_tail;
+  else
+    used = (DMA_BUFFER_CAPACITY - uart_tx_config->dma_buffer_tx_tail) +
+           uart_tx_config->dma_buffer_tx_head;
+  if (DMA_BUFFER_CAPACITY - used - 1 < len) {
+    LOG_INFO("queue_into_data_into_dma_buffer: Not enough space %u, %u (tail, "
+             "head)",
+             uart_tx_config->dma_buffer_tx_tail,
+             uart_tx_config->dma_buffer_tx_head);
+    return false;
+  }
 
-    printf("uart_tx_pio_on_gpio: Installed UART TX program on %u, %d, %u (sm, pio, pin)\n", uart_tx_config->sm, uart_tx_config->pio, uart_tx_config->pin);
+  for (int i = 0; i < len; i++) {
+    uart_tx_config->dma_buffer_tx[uart_tx_config->dma_buffer_tx_head] = *data++;
+    uart_tx_config->dma_buffer_tx_head =
+        (uart_tx_config->dma_buffer_tx_head + 1) % DMA_BUFFER_CAPACITY;
+  }
+
+  LOG_INFO("queue_into_data_into_dma_buffer: %u, %u (tail ,head)",
+           uart_tx_config->dma_buffer_tx_tail,
+           uart_tx_config->dma_buffer_tx_head);
+
+  uart_tx_kick_dma(uart_tx_config);
+
+  return true;
 }
+
+void uart_tx_kick_dma(UART_TX_CONFIG *uart_tx_config) {
+  if (dma_channel_is_busy(uart_tx_config->dma_channel_tx)) {
+    // LOG_INFO("uart_tx_kick_dma: DMA busy");
+    return;
+  }
+
+  if (uart_tx_config->dma_buffer_tx_tail ==
+      uart_tx_config->dma_buffer_tx_head) {
+    // LOG_INFO("uart_tx_kick_dma: Nothing to send");
+    return; // nothing to send
+  }
+
+  if (uart_tx_config->dma_buffer_tx_head > uart_tx_config->dma_buffer_tx_tail) {
+    while (uart_tx_config->pending_kicked_transfer) {
+      tight_loop_contents();
+    };
+    uart_tx_config->kicked =
+        uart_tx_config->dma_buffer_tx_head - uart_tx_config->dma_buffer_tx_tail;
+    uart_tx_config->pending_kicked_transfer = true;
+    dma_channel_configure(
+        uart_tx_config->dma_channel_tx, &uart_tx_config->dma_channel_tx_config,
+        &uart_tx_config->pio->txf[uart_tx_config->sm], // destination
+        &uart_tx_config
+             ->dma_buffer_tx[uart_tx_config->dma_buffer_tx_tail], // source
+        dma_encode_transfer_count(uart_tx_config->kicked), true);
+    LOG_INFO("uart_tx_kick_dma: Wrap %u, %u (tail, head)",
+             uart_tx_config->dma_buffer_tx_tail,
+             uart_tx_config->dma_buffer_tx_head);
+  } else {
+    uint tail = uart_tx_config->dma_buffer_tx_tail;
+    uint i = 0;
+    while (tail != uart_tx_config->dma_buffer_tx_head) {
+      uart_tx_config->dma_linear_buffer_tx[i++] =
+          uart_tx_config->dma_buffer_tx[tail];
+      tail = (tail + 1) % DMA_BUFFER_CAPACITY;
+    }
+    while (uart_tx_config->pending_kicked_transfer) {
+      tight_loop_contents();
+    };
+    uart_tx_config->kicked = i;
+    uart_tx_config->pending_kicked_transfer = true;
+    dma_channel_configure(
+        uart_tx_config->dma_channel_tx, &uart_tx_config->dma_channel_tx_config,
+        &uart_tx_config->pio->txf[uart_tx_config->sm], // destination
+        &uart_tx_config->dma_linear_buffer_tx,         // source
+        dma_encode_transfer_count(uart_tx_config->kicked), true);
+    LOG_INFO("uart_tx_kick_dma: Linear %u, %u (tail, head)",
+             uart_tx_config->dma_buffer_tx_tail,
+             uart_tx_config->dma_buffer_tx_head);
+  }
+}
+
+void dma_irq_handler(UART_TX_CONFIG *uart_tx_config) {
+  if (dma_irqn_get_channel_status(uart_tx_config->dma_irq_index,
+                                  uart_tx_config->dma_channel_tx)) {
+    dma_irqn_acknowledge_channel(uart_tx_config->dma_irq_index,
+                                 uart_tx_config->dma_channel_tx);
+    uart_tx_config->dma_buffer_tx_tail =
+        (uart_tx_config->dma_buffer_tx_tail + uart_tx_config->kicked) %
+        DMA_BUFFER_CAPACITY;
+    uart_tx_config->pending_kicked_transfer = false;
+  }
+}
+
+void put_uart_tx(UART_TX_CONFIG *uart_tx_config, const uint8_t *buf,
+                 size_t len) {
+  uart_tx_program_putuint8_buf(uart_tx_config->pio, uart_tx_config->sm, buf,
+                               len);
+};

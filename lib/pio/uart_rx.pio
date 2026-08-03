@@ -82,6 +82,10 @@ static inline void uart_rx_program_init(PIO pio, uint sm, uint offset, uint pin,
     
     pio_sm_init(pio, sm, offset, &c);
     pio_sm_set_enabled(pio, sm, true);
+
+    gpio_set_drive_strength(pin, GPIO_DRIVE_STRENGTH_4MA);
+    // gpio_disable_pulls(pin);
+    // gpio_set_slew_rate(pin, GPIO_SLEW_RATE_SLOW); 
 }
 
 static inline char uart_rx_program_getc(PIO pio, uint sm) {

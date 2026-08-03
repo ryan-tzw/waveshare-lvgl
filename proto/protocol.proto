@@ -18,4 +18,8 @@ message TCPSegment {
     uint32 sequence = 2;
     bool ack = 3;
     uint32 ack_sequence = 4;
+    uint64 to = 5; // device serial
+    uint64 from = 6; // device serial
+    bool syn = 7;
+    bool syn_ack = 8;
 }

@@ -1,3 +1,9 @@
+add_compile_options(
+  -O2
+  -fstack-usage
+  -Wstack-usage=512
+)
+
 # == DO NOT EDIT THE FOLLOWING LINES for the Raspberry Pi Pico VS Code Extension to work ==
 if(WIN32)
     set(USERHOME $ENV{USERPROFILE})
@@ -42,6 +48,7 @@ add_subdirectory(./lib/LCD)
 add_subdirectory(./lib/Touch)
 add_subdirectory(./lib/QMI8658)
 add_subdirectory(./lib/lvgl)
+add_subdirectory(./lib/logging)
 add_subdirectory(./lib/core1_task_queue)
 add_subdirectory(./lib/nanopb)
 add_subdirectory(./proto)
@@ -80,7 +87,7 @@ set(  LV_CONF_PATH
       CACHE STRING "" FORCE
 )
 
-add_compile_options(-O2)
+
 
 target_link_libraries(  RP2350-Touch-LCD-2 
                         LCD 
@@ -89,13 +96,16 @@ target_link_libraries(  RP2350-Touch-LCD-2
                         LVGL
                         Config
                         examples
+                        logging
                         core1_task_queue
                         pico_stdlib
+                        pico_multicore
                         hardware_spi
                         hardware_i2c
                         hardware_dma
                         simulator_engine
 )
+
 
 # Add the standard include files to the build
 target_include_directories(RP2350-Touch-LCD-2 PRIVATE
@@ -103,4 +113,3 @@ target_include_directories(RP2350-Touch-LCD-2 PRIVATE
 )
 
 pico_add_extra_outputs(RP2350-Touch-LCD-2)
-

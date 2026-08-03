@@ -31,14 +31,15 @@
 add_library(pio)
 pico_generate_pio_header(pio ${CMAKE_CURRENT_LIST_DIR}/uart_rx.pio)
 pico_generate_pio_header(pio ${CMAKE_CURRENT_LIST_DIR}/uart_tx.pio)
-target_sources(pio PRIVATE pio.c)
-target_link_libraries(pio
-        pico_stdlib
-        pico_multicore
+target_sources(pio PUBLIC pio.c)
+target_link_libraries(pio PUBLIC
         hardware_pio
         hardware_dma
-        pico_async_context_threadsafe_background
-        proto_generated
-        crc16
+)
+target_link_libraries(pio INTERFACE
+        
+)
+target_link_libraries(pio PRIVATE
+        logging
 )
 target_include_directories(pio PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})

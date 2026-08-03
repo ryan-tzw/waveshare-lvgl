@@ -3,11 +3,8 @@
 
 #include <stdbool.h>
 #include <stdint.h>
-#include <stdio.h>
-#include "pico/multicore.h"
-#include "pico/mutex.h"
 
-typedef void (*core1_task_fn_t)(void* arg);
+typedef void (*core1_task_fn_t)(void *arg);
 
 /**
  * Start core 1 task processor.
@@ -19,6 +16,6 @@ void core1_task_queue_init(void);
  *
  * Returns false if the queue is full.
  */
-bool core1_task_queue_post(core1_task_fn_t fn, void* arg);
+bool core1_task_queue_post(core1_task_fn_t fn, void *arg);
 
 #endif

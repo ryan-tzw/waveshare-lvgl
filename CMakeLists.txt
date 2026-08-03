@@ -67,6 +67,7 @@ add_subdirectory(./src/pio_uart)
 add_subdirectory(./src/framed_uart)
 add_subdirectory(./src/node_identity)
 add_subdirectory(./src/protocol)
+add_subdirectory(./src/network)
 
 pico_set_program_name(RP2350-Touch-LCD-2 "RP2350-Touch-LCD-2")
 pico_set_program_version(RP2350-Touch-LCD-2 "0.1")

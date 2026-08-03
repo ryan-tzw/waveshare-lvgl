@@ -19,7 +19,6 @@
 #define PIO_UART_PORT_COUNT 4
 #define HELLO_INTERVAL_MS 500
 #define NEIGHBOR_TIMEOUT_US 1500000 // 1500 ms
-#define LINK_STATE_DATABASE_CAPACITY 64
 #define LOCAL_LINK_STATE_INDEX 0
 #define LINK_STATE_RETRY_INTERVAL_US 250000
 
@@ -63,7 +62,7 @@ static FramedUart framed_uarts[PIO_UART_PORT_COUNT] = {0};
 static NodeIdentity *node_identity = NULL;
 static Neighbor neighbors[PIO_UART_PORT_COUNT] = {0};
 static LinkStateDatabaseEntry
-    link_state_database[LINK_STATE_DATABASE_CAPACITY] = {0};
+    link_state_database[NETWORK_LINK_STATE_DATABASE_CAPACITY] = {0};
 static LinkStateTransmissionState
     link_state_transmissions[PIO_UART_PORT_COUNT] = {0};
 static bool timing_output_enabled = false;
@@ -221,7 +220,7 @@ void network_print_link_state_database(void) {
 
     for (
         size_t entry_index = 0;
-        entry_index < LINK_STATE_DATABASE_CAPACITY;
+        entry_index < NETWORK_LINK_STATE_DATABASE_CAPACITY;
         entry_index++
     ) {
         if (link_state_database[entry_index].occupied) {
@@ -241,7 +240,7 @@ void network_print_link_state_database(void) {
 
     for (
         size_t entry_index = 0;
-        entry_index < LINK_STATE_DATABASE_CAPACITY;
+        entry_index < NETWORK_LINK_STATE_DATABASE_CAPACITY;
         entry_index++
     ) {
         const LinkStateDatabaseEntry *entry =
@@ -297,7 +296,7 @@ static LinkStateDatabaseEntry *find_link_state_entry(
 ) {
     for (
         size_t entry_index = 0;
-        entry_index < LINK_STATE_DATABASE_CAPACITY;
+        entry_index < NETWORK_LINK_STATE_DATABASE_CAPACITY;
         entry_index++
     ) {
         LinkStateDatabaseEntry *entry = &link_state_database[entry_index];
@@ -321,7 +320,7 @@ static LinkStateDatabaseEntry *find_link_state_entry(
 static LinkStateDatabaseEntry *find_empty_link_state_entry(void) {
     for (
         size_t entry_index = LOCAL_LINK_STATE_INDEX + 1;
-        entry_index < LINK_STATE_DATABASE_CAPACITY;
+        entry_index < NETWORK_LINK_STATE_DATABASE_CAPACITY;
         entry_index++
     ) {
         LinkStateDatabaseEntry *entry = &link_state_database[entry_index];
@@ -340,7 +339,7 @@ static void clear_link_state_knowledge(uint32_t local_port) {
 
     for (
         size_t entry_index = 0;
-        entry_index < LINK_STATE_DATABASE_CAPACITY;
+        entry_index < NETWORK_LINK_STATE_DATABASE_CAPACITY;
         entry_index++
     ) {
         LinkStateDatabaseEntry *entry = &link_state_database[entry_index];
@@ -667,7 +666,7 @@ static void service_link_state_transmission(uint32_t local_port) {
 
     for (
         size_t entry_index = 0;
-        entry_index < LINK_STATE_DATABASE_CAPACITY;
+        entry_index < NETWORK_LINK_STATE_DATABASE_CAPACITY;
         entry_index++
     ) {
         LinkStateDatabaseEntry *entry = &link_state_database[entry_index];
@@ -833,6 +832,29 @@ static bool check_neighbor_timeouts(void) {
 /* ==========================================================================
    Public network interface
    ========================================================================== */
+
+bool network_get_link_state_database_packet(
+    size_t entry_index,
+    NetworkPacket *packet
+) {
+    if (packet == NULL) {
+        return false;
+    }
+
+    if (entry_index >= NETWORK_LINK_STATE_DATABASE_CAPACITY) {
+        return false;
+    }
+
+    const LinkStateDatabaseEntry *entry =
+        &link_state_database[entry_index];
+
+    if (!entry->occupied) {
+        return false;
+    }
+
+    *packet = entry->packet;
+    return true;
+}
 
 void network_init(
     NodeIdentity *identity,

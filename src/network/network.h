@@ -1,8 +1,12 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stddef.h>
 
 #include "node_identity.h"
+#include "protocol.pb.h"
+
+#define NETWORK_LINK_STATE_DATABASE_CAPACITY 64
 
 /* The NodeIdentity must remain valid while the network is running. */
 void network_init(
@@ -11,3 +15,7 @@ void network_init(
 );
 void network_update(void);
 void network_print_link_state_database(void);
+bool network_get_link_state_database_packet(
+    size_t entry_index,
+    NetworkPacket *packet
+);

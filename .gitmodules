@@ -1,6 +1,0 @@
-[submodule "lib/nanopb"]
-	path = lib/nanopb
-	url = https://github.com/nanopb/nanopb
-[submodule "lib/klib"]
-	path = lib/klib
-	url = https://github.com/attractivechaos/klib

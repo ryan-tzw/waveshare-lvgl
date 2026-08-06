@@ -3,7 +3,6 @@ target_sources(socket PRIVATE socket.c)
 target_link_libraries(socket PRIVATE
         core1_task_queue
         cobs
-        pico_unique_id
         logging
         crc16
 )

@@ -21,22 +21,17 @@ static void core1_worker(void) {
     while (head == tail) {
       // wait for work which should never be the case because core1 is meant for
       // daemon processes
-      LOG_WARN("core1_worker: Empty queue in core1");
       tight_loop_contents();
     }
     task_item_t task = queue[tail];
     tail = (tail + 1) % CORE1_QUEUE_SIZE;
     if (task.fn) {
-      //   printf("core1_worker: executing");
       task.fn(task.arg);
     }
   }
 }
 
-void core1_task_queue_init(void) {
-  // stack_paint();
-  multicore_launch_core1(core1_worker);
-}
+void core1_task_queue_init(void) { multicore_launch_core1(core1_worker); }
 
 bool core1_task_queue_post(core1_task_fn_t fn, void *arg) {
   mutex_enter_blocking(&head_mutex);
@@ -48,8 +43,6 @@ bool core1_task_queue_post(core1_task_fn_t fn, void *arg) {
     mutex_exit(&head_mutex);
     return false;
   }
-  // printf("core1_task_queue_post: %d, %u, %u (size, tail, next)",
-  // CORE1_QUEUE_SIZE, tail, next);
 
   queue[head].fn = fn;
   queue[head].arg = arg;

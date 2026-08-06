@@ -1,8 +1,5 @@
 #include "pio.h"
 
-#include <stdio.h>
-#include <stdlib.h>
-
 #include "logging.h"
 #include "uart_rx.pio.h"
 #include "uart_tx.pio.h"

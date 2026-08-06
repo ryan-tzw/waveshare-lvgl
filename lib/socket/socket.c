@@ -6,7 +6,6 @@
 #include "logging.h"
 #include "pb_decode.h"
 #include "pb_encode.h"
-#include "pico/unique_id.h"
 
 #define MAX_TCP_SOCKETS 4
 static uint sockets_initialized = 0;
@@ -169,8 +168,15 @@ bool try_rcv_tcp_from_dma_buffer(UART_RX_CONFIG *uart_rx_cfg,
   return false;
 }
 
-void send_tcp_in_ethernet_in_cobs_in_uart(
-    UART_TX_CONFIG *uart_tx_config, device_protocol_TCPSegment *tcp_segment) {
+void send_tcp_over_socket(TCP_SOCKET *tcp_socket,
+                          device_protocol_TCPSegment *tcp_segment) {
+
+  UART_TX_CONFIG *uart_tx_config = &tcp_socket->uart_tx_cfg;
+  if (tcp_socket->send_ack) {
+    tcp_segment->ack = true;
+    tcp_segment->ack_sequence = tcp_socket->tcp_segment_rwnd_tail;
+  }
+
   // Initialize buffer and stream for encapsulating TCPSegment within our
   // EthernetFrame
   static uint8_t ethernet_frame_buffer[ETHERNET_FRAME_MAX_SIZE_BYTES];
@@ -207,12 +213,6 @@ void send_tcp_in_ethernet_in_cobs_in_uart(
 
   // Push over UART
   put_uart_tx(uart_tx_config, cobs_buffer, cobs_len);
-  mutex_exit(&uart_tx_config->mutex);
-// mutex_enter_blocking(&uart_tx_config->mutex);
-// queue_into_data_into_dma_buffer(uart_tx_config, cobs_buffer, cobs_len);
-// mutex_exit(&uart_tx_config->mutex);
-
-// Debug
 #if LOG_LEVEL >= LOG_LEVEL_DEBUG
   static char output[256];
   size_t offset = 0;
@@ -234,9 +234,19 @@ void send_tcp_in_ethernet_in_cobs_in_uart(
            "(cobs_len, crc, cobs_data)");
   LOG_DEBUG("%s", output);
 #endif
+  tcp_socket->socket_prevent_timeout_at =
+      make_timeout_time_ms(TCP_SOCKET_PREVENT_TIMEOUT_TIMER_MS);
+  mutex_exit(&uart_tx_config->mutex);
+  // mutex_enter_blocking(&uart_tx_config->mutex);
+  // queue_into_data_into_dma_buffer(uart_tx_config, cobs_buffer, cobs_len);
+  // mutex_exit(&uart_tx_config->mutex);
 }
 
 void transition_to_connected(TCP_SOCKET *tcp_socket, uint64_t to) {
+  LOG_INFO("transition_to_connected: Socket connected %u, %u, %llu (rx_pin, "
+           "tx_pin, to)",
+           tcp_socket->uart_rx_cfg.pin, tcp_socket->uart_tx_cfg.pin,
+           tcp_socket->to);
   tcp_socket->tcp_segment_swnd_head = 0;
   tcp_socket->tcp_segment_swnd_next = 0;
   tcp_socket->tcp_segment_swnd_tail = 0;
@@ -258,6 +268,10 @@ void transition_to_connected(TCP_SOCKET *tcp_socket, uint64_t to) {
 }
 
 void transition_to_connecting(TCP_SOCKET *tcp_socket) {
+  LOG_INFO("transition_to_connected: Socket disconnected %u, %u, %llu (rx_pin, "
+           "tx_pin, to)",
+           tcp_socket->uart_rx_cfg.pin, tcp_socket->uart_tx_cfg.pin,
+           tcp_socket->to);
   if (tcp_socket->state == CONNECTED) {
     if (tcp_socket->on_disconnect) {
       tcp_socket->on_disconnect(tcp_socket->on_disconnect_arg);
@@ -276,8 +290,6 @@ void rcv_task(void *arg) {
   static device_protocol_TCPSegment tcp_segment =
       device_protocol_TCPSegment_init_zero;
   while (dma_chan_has_unprocessed_data(&tcp_socket->uart_rx_cfg)) {
-    tcp_socket->socket_timeout_at =
-        make_timeout_time_ms(TCP_SOCKET_TIMEOUT_TIMER_MS);
     bool success =
         try_rcv_tcp_from_dma_buffer(&tcp_socket->uart_rx_cfg, &tcp_segment);
     if (success) {
@@ -288,8 +300,7 @@ void rcv_task(void *arg) {
         syn_ack.syn_ack = true;
         syn_ack.from = tcp_socket->from;
         syn_ack.to = tcp_segment.from;
-        send_tcp_in_ethernet_in_cobs_in_uart(&tcp_socket->uart_tx_cfg,
-                                             &syn_ack);
+        send_tcp_over_socket(tcp_socket, &syn_ack);
         transition_to_connected(tcp_socket, tcp_segment.from);
         LOG_INFO("rcv_task: Sent SYN-ACK to %llu", syn_ack.to);
       } else if (tcp_segment.to != tcp_socket->from) {
@@ -309,7 +320,7 @@ void rcv_task(void *arg) {
             tcp_socket,
             tcp_segment.from); // No matter what will want to transition as
         // opposing device as resetted socket states
-        LOG_INFO("rcv_task: Rcvd SYN-ACK from %llu", tcp_segment.from);
+        LOG_DEBUG("rcv_task: Rcvd SYN-ACK from %llu", tcp_segment.from);
       } else if (tcp_socket->state == CONNECTING) {
         // Above SYN-ACK case already covers switching to CONNECTED
         // Leaving this case empty also ignores all packets and protects rwnd
@@ -340,9 +351,9 @@ void rcv_task(void *arg) {
                 tcp_socket->tcp_segment_swnd_next,
                 tcp_socket->tcp_segment_swnd_head);
           } else {
-            LOG_INFO(
-                "rcv_task: Rcvd stale ACK %u, %u (ack_sequence, swnd_tail)",
-                tcp_segment.ack_sequence, tcp_socket->tcp_segment_swnd_tail);
+            LOG_INFO("rcv_task: Rcvd stale ACK %u, %u (ack_seq, swnd_tail)",
+                     tcp_segment.ack_sequence,
+                     tcp_socket->tcp_segment_swnd_tail);
           }
         }
 
@@ -394,6 +405,8 @@ void rcv_task(void *arg) {
     } else {
       LOG_DEBUG("rcv_task: Failed to rcv TCP segment");
     }
+    tcp_socket->socket_timeout_at =
+        make_timeout_time_ms(TCP_SOCKET_TIMEOUT_TIMER_MS);
   }
 
   mutex_exit(&tcp_socket->mutex);
@@ -421,35 +434,28 @@ void swnd_sender_task(void *arg) {
         while (tcp_segment_swnd_tail != tcp_socket->tcp_segment_swnd_next) {
           device_protocol_TCPSegment *tcp_segment =
               &tcp_socket->tcp_segment_swnd_buffer[tcp_segment_swnd_tail];
-          if (tcp_socket->send_ack) {
-            tcp_segment->ack = true;
-            tcp_segment->ack_sequence = tcp_socket->tcp_segment_rwnd_tail;
-          }
-          send_tcp_in_ethernet_in_cobs_in_uart(&tcp_socket->uart_tx_cfg,
-                                               tcp_segment);
+          send_tcp_over_socket(tcp_socket, tcp_segment);
           tcp_segment_swnd_tail =
               (tcp_segment_swnd_tail + 1) % TCP_SEGMENT_BUFFER_CAPACITY;
         }
         if (tcp_socket->send_ack) {
-          LOG_INFO("swnd_sender_task: Resent with ACK %u, %u, %u, %u (ack_seq, "
-                   "tail, "
-                   "next, "
-                   "head)",
-                   tcp_socket->tcp_segment_rwnd_tail,
-                   tcp_socket->tcp_segment_swnd_tail,
-                   tcp_socket->tcp_segment_swnd_next,
-                   tcp_socket->tcp_segment_swnd_head);
+          LOG_INFO(
+              "swnd_sender_task: Resent with ACK %u; %u, %u, %u (rwnd_tail; "
+              "swnd_tail, "
+              "swnd_next, "
+              "swnd_head)",
+              tcp_socket->tcp_segment_rwnd_tail,
+              tcp_socket->tcp_segment_swnd_tail,
+              tcp_socket->tcp_segment_swnd_next,
+              tcp_socket->tcp_segment_swnd_head);
         } else {
-          LOG_INFO("swnd_sender_task: Resent %u, %u, %u (tail, "
-                   "next, "
-                   "head)",
+          LOG_INFO("swnd_sender_task: Resent %u, %u, %u (swnd_tail, "
+                   "swnd_next, "
+                   "swnd_head)",
                    tcp_socket->tcp_segment_swnd_tail,
                    tcp_socket->tcp_segment_swnd_next,
                    tcp_socket->tcp_segment_swnd_head);
         }
-
-        tcp_socket->socket_prevent_timeout_at =
-            make_timeout_time_ms(TCP_SOCKET_PREVENT_TIMEOUT_TIMER_MS);
         tcp_socket->segment_timeout_at =
             make_timeout_time_ms(TCP_SEGMENT_TIMEOUT_TIMER_MS);
       } else {
@@ -477,12 +483,7 @@ void swnd_sender_task(void *arg) {
         device_protocol_TCPSegment *unsent_segment =
             &tcp_socket
                  ->tcp_segment_swnd_buffer[tcp_socket->tcp_segment_swnd_next];
-        if (tcp_socket->send_ack) {
-          unsent_segment->ack = true;
-          unsent_segment->ack_sequence = tcp_socket->tcp_segment_rwnd_tail;
-        }
-        send_tcp_in_ethernet_in_cobs_in_uart(&tcp_socket->uart_tx_cfg,
-                                             unsent_segment);
+        send_tcp_over_socket(tcp_socket, unsent_segment);
         if (unsent_segment->ack) {
           LOG_DEBUG("swnd_sender_task: Sent TCP segment %u with ACK %u",
                     unsent_segment->sequence, unsent_segment->ack_sequence);
@@ -497,24 +498,22 @@ void swnd_sender_task(void *arg) {
       }
       if (sent) {
         if (tcp_socket->send_ack) {
-          LOG_INFO("swnd_sender_task: Sent %u, %u, %u (tail, "
-                   "next, "
-                   "head)",
+          LOG_INFO("swnd_sender_task: Sent with ACK %u, %u, %u, %u (ack_seq, "
+                   "swnd_tail, "
+                   "swnd_next, "
+                   "swnd_head)",
+                   tcp_socket->tcp_segment_rwnd_tail,
                    tcp_socket->tcp_segment_swnd_tail,
                    tcp_socket->tcp_segment_swnd_next,
                    tcp_socket->tcp_segment_swnd_head);
         } else {
-          LOG_INFO(
-              "swnd_sender_task: Sent with ACK %u, %u, %u, %u (ack_seq, tail, "
-              "next, "
-              "head)",
-              tcp_socket->tcp_segment_rwnd_tail,
-              tcp_socket->tcp_segment_swnd_tail,
-              tcp_socket->tcp_segment_swnd_next,
-              tcp_socket->tcp_segment_swnd_head);
+          LOG_INFO("swnd_sender_task: Sent %u, %u, %u (swnd_tail, "
+                   "swnd_next, "
+                   "swnd_head)",
+                   tcp_socket->tcp_segment_swnd_tail,
+                   tcp_socket->tcp_segment_swnd_next,
+                   tcp_socket->tcp_segment_swnd_head);
         }
-        tcp_socket->socket_prevent_timeout_at =
-            make_timeout_time_ms(TCP_SOCKET_PREVENT_TIMEOUT_TIMER_MS);
         tcp_socket->segment_timeout_at =
             make_timeout_time_ms(TCP_SEGMENT_TIMEOUT_TIMER_MS);
       } else {
@@ -560,15 +559,7 @@ void timeout_if_connected_and_send_syn_if_unconnected_task(void *arg) {
             device_protocol_TCPSegment_init_zero;
         prevent_timeout_segment.from = tcp_socket->from;
         prevent_timeout_segment.to = tcp_socket->to;
-        if (tcp_socket->send_ack) {
-          prevent_timeout_segment.ack = true;
-          prevent_timeout_segment.ack_sequence =
-              tcp_socket->tcp_segment_rwnd_tail;
-        }
-        send_tcp_in_ethernet_in_cobs_in_uart(&tcp_socket->uart_tx_cfg,
-                                             &prevent_timeout_segment);
-        tcp_socket->socket_prevent_timeout_at =
-            make_timeout_time_ms(TCP_SOCKET_PREVENT_TIMEOUT_TIMER_MS);
+        send_tcp_over_socket(tcp_socket, &prevent_timeout_segment);
         LOG_DEBUG("timeout_if_connected_and_send_syn_if_unconnected_task: "
                   "Preventing "
                   "socket timeout on "
@@ -585,9 +576,9 @@ void timeout_if_connected_and_send_syn_if_unconnected_task(void *arg) {
         device_protocol_TCPSegment_init_zero;
     syn_segment.from = tcp_socket->from;
     syn_segment.syn = true;
-    send_tcp_in_ethernet_in_cobs_in_uart(&tcp_socket->uart_tx_cfg,
-                                         &syn_segment);
-    LOG_INFO("timeout_if_connected_and_send_syn_if_unconnected_task: Sent SYN");
+    send_tcp_over_socket(tcp_socket, &syn_segment);
+    LOG_DEBUG(
+        "timeout_if_connected_and_send_syn_if_unconnected_task: Sent SYN");
   } else {
     panic("timeout_if_connected_and_send_syn_if_unconnected_task: Unknown "
           "state");
@@ -634,9 +625,10 @@ bool async_send_app_packet_in_tcp(
   tcp_socket->on_rcv_arg[tcp_socket->tcp_segment_swnd_head] = on_rcv_arg;
   mutex_exit(&tcp_socket->mutex);
 
-  LOG_INFO("async_send_app_packet_in_tcp: Queued %u, %u, %u (tail, next, head)",
-           tcp_socket->tcp_segment_swnd_tail, tcp_socket->tcp_segment_swnd_next,
-           tcp_socket->tcp_segment_swnd_head);
+  LOG_DEBUG(
+      "async_send_app_packet_in_tcp: Queued %u, %u, %u (tail, next, head)",
+      tcp_socket->tcp_segment_swnd_tail, tcp_socket->tcp_segment_swnd_next,
+      tcp_socket->tcp_segment_swnd_head);
   return true;
 }
 
@@ -673,13 +665,6 @@ TCP_SOCKET *init_socket(TCP_SOCKET_CFG *tcp_socket_cfg) {
   core1_task_queue_post(timeout_if_connected_and_send_syn_if_unconnected_task,
                         tcp_socket);
   core1_task_queue_post(rcv_task, tcp_socket);
-
-  // Initialize from
-  pico_unique_board_id_t id;
-  pico_get_unique_board_id(&id);
-  for (int i = 0; i < 8; i++) {
-    tcp_socket->from |= ((uint64_t)id.id[i]) << (8 * i);
-  }
 
   sockets_initialized++;
   return tcp_socket;

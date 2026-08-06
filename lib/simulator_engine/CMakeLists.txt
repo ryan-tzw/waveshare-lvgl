@@ -4,9 +4,11 @@ target_link_libraries(simulator_engine PUBLIC
         socket
 )
 target_link_libraries(simulator_engine PRIVATE
+        klib
         pio
         proto_generated
         core1_task_queue
         logging
+        pico_unique_id
 )
 target_include_directories(simulator_engine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})

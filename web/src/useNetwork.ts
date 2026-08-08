@@ -105,8 +105,6 @@ export function useNetwork() {
         webUsbConnected: usb.connected,
         connectWebUsb: usb.connect,
         disconnectWebUsb,
-        gateway: state.gateway,
-        linkStates: state.linkStates,
         graph,
     };
 }

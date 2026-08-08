@@ -1,5 +1,6 @@
 import "./App.css";
 import { ConnectButton } from "./ConnectButton";
+import { NetworkGraphView } from "./NetworkGraphView";
 import { useNetwork } from "./useNetwork";
 
 function App() {
@@ -15,6 +16,8 @@ function App() {
                     disconnectWebUsb={network.disconnectWebUsb}
                 />
             </section>
+
+            <NetworkGraphView graph={network.graph} />
         </>
     );
 }

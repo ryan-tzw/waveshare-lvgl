@@ -83,7 +83,16 @@ static void send_next_database_update(void) {
 void gateway_update(const NodeIdentity *identity) {
     hard_assert(identity != NULL);
 
-    if (web_usb_take_connected_event()) {
+    bool connected;
+    if (web_usb_take_connection_change(&connected)) {
+        network_set_gateway_connected(connected);
+
+        if (!connected) {
+            database_scan_active = false;
+            next_database_index = 0;
+            return;
+        }
+
         network_clear_link_state_database_updates();
         send_gateway_hello(identity);
         database_scan_active = true;

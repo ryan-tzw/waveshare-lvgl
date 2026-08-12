@@ -14,6 +14,7 @@ void network_init(
     bool timing_output_enabled
 );
 void network_update(void);
+void network_set_gateway_connected(bool connected);
 void network_print_link_state_database(void);
 bool network_get_link_state_database_packet(
     size_t entry_index,

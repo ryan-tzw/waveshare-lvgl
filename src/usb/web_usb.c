@@ -9,22 +9,30 @@
 #define WEB_USB_MAX_FRAME_SIZE (WEB_USB_LENGTH_SIZE + WEB_USB_MAX_PAYLOAD_SIZE)
 
 static bool web_usb_connected = false;
-static bool connected_event_pending = false;
+static bool connection_change_pending = false;
 static uint8_t tx_buffer[WEB_USB_MAX_FRAME_SIZE] = {0};
 static size_t tx_length = 0;
 static size_t tx_offset = 0;
 
 void web_usb_set_connected(bool connected) {
+    if (web_usb_connected == connected) {
+        return;
+    }
+
     web_usb_connected = connected;
-    connected_event_pending = connected;
+    connection_change_pending = true;
     tx_length = 0;
     tx_offset = 0;
 }
 
-bool web_usb_take_connected_event(void) {
-    bool event_pending = connected_event_pending;
-    connected_event_pending = false;
-    return event_pending;
+bool web_usb_take_connection_change(bool *connected) {
+    if (connected == NULL || !connection_change_pending) {
+        return false;
+    }
+
+    *connected = web_usb_connected;
+    connection_change_pending = false;
+    return true;
 }
 
 bool web_usb_can_send(void) {

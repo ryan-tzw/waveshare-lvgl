@@ -67,6 +67,7 @@ static LinkStateDatabaseEntry
 static LinkStateTransmissionState
     link_state_transmissions[PIO_UART_PORT_COUNT] = {0};
 static bool timing_output_enabled = false;
+static bool local_gateway_connected = false;
 static bool hello_schedule_started = false;
 static absolute_time_t next_hello_time;
 static uint8_t received_payload[FRAMED_UART_MAX_PAYLOAD_SIZE];
@@ -189,9 +190,10 @@ static void print_link_state(const NetworkPacket *packet) {
     }
 
     printf(
-        " (boot %08lx, sequence %lu) -> [",
+        " (boot %08lx, sequence %lu, gateway %s) -> [",
         (unsigned long)packet->boot_id,
-        (unsigned long)packet->sequence
+        (unsigned long)packet->sequence,
+        link_state->gateway_connected ? "connected" : "disconnected"
     );
 
     for (size_t i = 0; i < link_state->neighbors_count; i++) {
@@ -552,6 +554,7 @@ static void update_local_link_state(
     packet.which_payload = NetworkPacket_link_state_tag;
 
     LinkState *link_state = &packet.payload.link_state;
+    link_state->gateway_connected = local_gateway_connected;
 
     for (uint32_t local_port = 0; local_port < PIO_UART_PORT_COUNT; local_port++) {
         const Neighbor *neighbor = &current_neighbors[local_port];
@@ -893,6 +896,22 @@ void network_clear_link_state_database_updates(void) {
     ) {
         link_state_database[entry_index].update_pending = false;
     }
+}
+
+void network_set_gateway_connected(bool connected) {
+    hard_assert(node_identity != NULL);
+
+    if (local_gateway_connected == connected) {
+        return;
+    }
+
+    local_gateway_connected = connected;
+    update_local_link_state(
+        &link_state_database[LOCAL_LINK_STATE_INDEX],
+        node_identity,
+        neighbors
+    );
+    request_link_state_scans_for_observed_neighbors();
 }
 
 void network_init(

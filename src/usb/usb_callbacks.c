@@ -1,4 +1,3 @@
-#include "init_widgets.h"
 #include "tusb.h"
 #include "usb_descriptors.h"
 #include "web_usb.h"
@@ -57,14 +56,6 @@ bool tud_vendor_control_xfer_cb(uint8_t rhport, uint8_t stage, tusb_control_requ
 
     // stall unknown request
     return false;
-}
-
-void tud_vendor_rx_cb(uint8_t itf, uint8_t const* buffer, uint16_t bufsize) {
-    while (tud_vendor_available()) {
-        char buf[64];
-        const uint32_t count = tud_vendor_read(buf, sizeof(buf));
-        write_to_label(buf, count);
-    }
 }
 
 // Invoked when cdc line state changed e.g connected/disconnected

@@ -12,6 +12,7 @@ message LinkStateNeighbor {
 
 message LinkState {
     repeated LinkStateNeighbor neighbors = 1;
+    bool gateway_connected = 2;
 }
 
 message Ack {

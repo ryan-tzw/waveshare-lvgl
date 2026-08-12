@@ -44,4 +44,6 @@ void pio_uart_write(PioUart *uart, const uint8_t *data, size_t length);
 /* RX reads only from the interrupt-fed software queue and never blocks. */
 bool pio_uart_readable(const PioUart *uart);
 bool pio_uart_try_read(PioUart *uart, uint8_t *byte);
+
+/* Returns the cumulative number of RX bytes dropped since initialization. */
 uint32_t pio_uart_rx_dropped_bytes(const PioUart *uart);

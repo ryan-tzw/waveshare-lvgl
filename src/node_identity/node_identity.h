@@ -12,6 +12,10 @@ typedef struct {
     bool initialized;
 } NodeIdentity;
 
-/* A NodeIdentity must be zero-initialized before first use. */
+/*
+ * A NodeIdentity must be zero-initialized before first use. Initialization
+ * writes the persistent boot-ID journal in flash, so call it once during early
+ * single-core startup.
+ */
 bool node_identity_init(NodeIdentity *identity);
 uint32_t node_identity_next_sequence(NodeIdentity *identity);

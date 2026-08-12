@@ -25,11 +25,22 @@ typedef struct {
 
 /* A FramedUart must be zero-initialized before first use. */
 bool framed_uart_init(FramedUart *framed_uart, PioUart *uart);
+
+/*
+ * Sends one complete frame using the underlying UART's blocking write.
+ * A NULL payload is valid only when length is zero.
+ */
 bool framed_uart_send(
     FramedUart *framed_uart,
     const uint8_t *payload,
     size_t length
 );
+
+/*
+ * Drains currently queued UART bytes until one valid frame is copied or no
+ * more bytes remain. Invalid frames are silently discarded. The output length
+ * is set to zero unless a complete frame is returned.
+ */
 bool framed_uart_try_receive(
     FramedUart *framed_uart,
     uint8_t *payload,

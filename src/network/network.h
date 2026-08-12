@@ -14,11 +14,23 @@ void network_init(
     bool timing_output_enabled
 );
 void network_update(void);
+
+/* A changed value originates and synchronizes a new local LINK_STATE. */
 void network_set_gateway_connected(bool connected);
 void network_print_link_state_database(void);
+
+/* Copies an occupied database packet; invalid or empty indices return false. */
 bool network_get_link_state_database_packet(
     size_t entry_index,
     NetworkPacket *packet
 );
+
+/*
+ * Return value: whether a pending database update was available.
+ * Output parameter: the updated entry index when the return value is true.
+ * Repeated changes to one entry are coalesced until its update is consumed.
+ */
 bool network_take_link_state_database_update(size_t *entry_index);
+
+/* Clears update notifications without changing packets or UART knowledge. */
 void network_clear_link_state_database_updates(void);

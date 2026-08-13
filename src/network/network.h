@@ -18,6 +18,7 @@ void network_update(void);
 /* A changed value originates and synchronizes a new local LINK_STATE. */
 void network_set_gateway_connected(bool connected);
 void network_print_link_state_database(void);
+void network_print_gateway_routes(void);
 
 /* Copies an occupied database packet; invalid or empty indices return false. */
 bool network_get_link_state_database_packet(

@@ -51,6 +51,19 @@ typedef struct {
     uint64_t next_retry_time_us;
 } LinkStateTransmissionState;
 
+typedef struct {
+    uint8_t node_id[PICO_UNIQUE_BOARD_ID_SIZE_BYTES];
+    uint32_t local_port;
+    uint32_t hop_count;
+    bool is_local;
+} GatewayRoute;
+
+typedef struct {
+    size_t database_index;
+    uint32_t first_local_port;
+    uint32_t hop_count;
+} GatewayRouteTraversal;
+
 static const PioUartPinPair pio_uart_pin_pairs[PIO_UART_PORT_COUNT] = {
     {.tx_pin = 3, .rx_pin = 0},
     {.tx_pin = 4, .rx_pin = 10},
@@ -66,6 +79,8 @@ static LinkStateDatabaseEntry
     link_state_database[NETWORK_LINK_STATE_DATABASE_CAPACITY] = {0};
 static LinkStateTransmissionState
     link_state_transmissions[PIO_UART_PORT_COUNT] = {0};
+static GatewayRoute gateway_routes[NETWORK_LINK_STATE_DATABASE_CAPACITY] = {0};
+static size_t gateway_route_count = 0;
 static bool timing_output_enabled = false;
 static bool local_gateway_connected = false;
 static bool hello_schedule_started = false;
@@ -255,6 +270,48 @@ void network_print_link_state_database(void) {
     }
 }
 
+void network_print_gateway_routes(void) {
+    const char *route_word = gateway_route_count == 1 ? "route" : "routes";
+
+    printf(
+        "Gateway routes (%lu %s)\n",
+        (unsigned long)gateway_route_count,
+        route_word
+    );
+
+    if (gateway_route_count == 0) {
+        printf("(none)\n\n");
+        return;
+    }
+
+    for (
+        size_t route_index = 0;
+        route_index < gateway_route_count;
+        route_index++
+    ) {
+        const GatewayRoute *route = &gateway_routes[route_index];
+
+        for (size_t i = 0; i < sizeof(route->node_id); i++) {
+            unsigned int node_id_byte = route->node_id[i];
+            printf("%02x", node_id_byte);
+        }
+
+        if (route->is_local) {
+            printf(" -> local, 0 hops\n");
+        } else {
+            const char *hop_word = route->hop_count == 1 ? "hop" : "hops";
+            printf(
+                " -> port %lu, %lu %s\n",
+                (unsigned long)route->local_port,
+                (unsigned long)route->hop_count,
+                hop_word
+            );
+        }
+    }
+
+    printf("\n");
+}
+
 static void print_ack(
     const char *event,
     const NetworkPacket *packet,
@@ -294,8 +351,9 @@ static void print_ack(
    LINK_STATE database lookup and knowledge
    ========================================================================== */
 
-static LinkStateDatabaseEntry *find_link_state_entry(
-    const uint8_t *source_node_id
+static bool find_link_state_entry_index(
+    const uint8_t *source_node_id,
+    size_t *found_index
 ) {
     for (
         size_t entry_index = 0;
@@ -313,11 +371,24 @@ static LinkStateDatabaseEntry *find_link_state_entry(
             source_node_id,
             sizeof(entry->packet.source_node_id)
         ) == 0) {
-            return entry;
+            *found_index = entry_index;
+            return true;
         }
     }
 
-    return NULL;
+    return false;
+}
+
+static LinkStateDatabaseEntry *find_link_state_entry(
+    const uint8_t *source_node_id
+) {
+    size_t entry_index;
+
+    if (!find_link_state_entry_index(source_node_id, &entry_index)) {
+        return NULL;
+    }
+
+    return &link_state_database[entry_index];
 }
 
 static LinkStateDatabaseEntry *find_empty_link_state_entry(void) {
@@ -356,6 +427,135 @@ static void clear_link_state_knowledge(uint32_t local_port) {
         "LINK_STATE knowledge cleared for port %lu\n\n",
         (unsigned long)local_port
     );
+}
+
+/* ==========================================================================
+   Gateway route calculation
+   ========================================================================== */
+
+static bool link_has_reciprocal_observation(
+    const NetworkPacket *source_packet,
+    const LinkStateNeighbor *source_neighbor,
+    const NetworkPacket *neighbor_packet
+) {
+    if (
+        source_neighbor->local_port >= PIO_UART_PORT_COUNT ||
+        source_neighbor->remote_port >= PIO_UART_PORT_COUNT
+    ) {
+        return false;
+    }
+
+    const LinkState *neighbor_link_state = &neighbor_packet->payload.link_state;
+
+    for (
+        size_t neighbor_index = 0;
+        neighbor_index < neighbor_link_state->neighbors_count;
+        neighbor_index++
+    ) {
+        const LinkStateNeighbor *reciprocal_neighbor = &neighbor_link_state->neighbors[neighbor_index];
+
+        bool node_id_matches = memcmp(
+            reciprocal_neighbor->node_id,
+            source_packet->source_node_id,
+            sizeof(reciprocal_neighbor->node_id)
+        ) == 0;
+        bool ports_match =
+            reciprocal_neighbor->local_port == source_neighbor->remote_port &&
+            reciprocal_neighbor->remote_port == source_neighbor->local_port;
+
+        if (node_id_matches && ports_match) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static void calculate_gateway_routes(void) {
+    static bool visited[NETWORK_LINK_STATE_DATABASE_CAPACITY];
+    static GatewayRouteTraversal queue[NETWORK_LINK_STATE_DATABASE_CAPACITY];
+
+    memset(visited, 0, sizeof(visited));
+    memset(gateway_routes, 0, sizeof(gateway_routes));
+    gateway_route_count = 0;
+
+    const LinkStateDatabaseEntry *local_entry = &link_state_database[LOCAL_LINK_STATE_INDEX];
+    if (!local_entry->occupied) {
+        return;
+    }
+
+    size_t next_queue_index = 0;
+    size_t queue_length = 1;
+    queue[0] = (GatewayRouteTraversal){
+        .database_index = LOCAL_LINK_STATE_INDEX,
+        .first_local_port = 0,
+        .hop_count = 0
+    };
+    visited[LOCAL_LINK_STATE_INDEX] = true;
+
+    while (next_queue_index < queue_length) {
+        GatewayRouteTraversal current = queue[next_queue_index];
+        next_queue_index++;
+
+        const LinkStateDatabaseEntry *current_entry = &link_state_database[current.database_index];
+        const NetworkPacket *current_packet         = &current_entry->packet;
+        const LinkState *current_link_state         = &current_packet->payload.link_state;
+
+        if (current_link_state->gateway_connected) {
+            GatewayRoute *route = &gateway_routes[gateway_route_count];
+            memcpy(
+                route->node_id,
+                current_packet->source_node_id,
+                sizeof(route->node_id)
+            );
+            route->local_port = current.first_local_port;
+            route->hop_count  = current.hop_count;
+            route->is_local   = current.database_index == LOCAL_LINK_STATE_INDEX;
+            gateway_route_count++;
+        }
+
+        for (
+            size_t neighbor_index = 0;
+            neighbor_index < current_link_state->neighbors_count;
+            neighbor_index++
+        ) {
+            const LinkStateNeighbor *neighbor = &current_link_state->neighbors[neighbor_index];
+            size_t neighbor_database_index;
+
+            if (!find_link_state_entry_index(
+                neighbor->node_id,
+                &neighbor_database_index
+            )) {
+                continue;
+            }
+
+            if (visited[neighbor_database_index]) {
+                continue;
+            }
+
+            const LinkStateDatabaseEntry *neighbor_entry = &link_state_database[neighbor_database_index];
+            if (!link_has_reciprocal_observation(
+                current_packet,
+                neighbor,
+                &neighbor_entry->packet
+            )) {
+                continue;
+            }
+
+            uint32_t first_local_port = current.first_local_port;
+            if (current.database_index == LOCAL_LINK_STATE_INDEX) {
+                first_local_port = neighbor->local_port;
+            }
+
+            visited[neighbor_database_index] = true;
+            queue[queue_length] = (GatewayRouteTraversal){
+                .database_index = neighbor_database_index,
+                .first_local_port = first_local_port,
+                .hop_count = current.hop_count + 1
+            };
+            queue_length++;
+        }
+    }
 }
 
 /* ==========================================================================
@@ -499,6 +699,7 @@ static bool store_received_link_state(
         entry->occupied = true;
         entry->known_by_ports = ingress_port_mask;
         entry->update_pending = true;
+        calculate_gateway_routes();
 
         printf(
             "Remote LINK_STATE stored on port %lu\n",
@@ -528,6 +729,7 @@ static bool store_received_link_state(
     entry->packet = *packet;
     entry->known_by_ports = ingress_port_mask;
     entry->update_pending = true;
+    calculate_gateway_routes();
 
     printf(
         "Remote LINK_STATE updated on port %lu\n",
@@ -581,6 +783,7 @@ static void update_local_link_state(
     entry->occupied = true;
     entry->known_by_ports = 0;
     entry->update_pending = true;
+    calculate_gateway_routes();
 
     printf("Local LINK_STATE updated\n");
     print_link_state(&entry->packet);

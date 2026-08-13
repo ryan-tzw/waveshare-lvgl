@@ -54,6 +54,7 @@ int main(void) {
     while (1) {
         if (take_link_state_database_print_request()) {
             network_print_link_state_database();
+            network_print_gateway_routes();
         }
 
         network_update();

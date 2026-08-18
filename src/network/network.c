@@ -1,4 +1,5 @@
 #include "framed_uart.h"
+#include "neighbor_table.h"
 #include "network.h"
 #include "node_identity.h"
 #include "pb_decode.h"
@@ -22,18 +23,26 @@
 #define LOCAL_LINK_STATE_INDEX 0
 #define LINK_STATE_RETRY_INTERVAL_US 250000
 
+enum {
+    NEIGHBOR_ADJACENCY_CHANGE_MASK =
+        NEIGHBOR_CHANGE_CONNECTED |
+        NEIGHBOR_CHANGE_DISCONNECTED |
+        NEIGHBOR_CHANGE_NODE |
+        NEIGHBOR_CHANGE_REMOTE_PORT,
+    NEIGHBOR_SYNCHRONIZATION_RESET_MASK =
+        NEIGHBOR_CHANGE_DISCONNECTED |
+        NEIGHBOR_CHANGE_NODE |
+        NEIGHBOR_CHANGE_BOOT,
+    NEIGHBOR_SYNCHRONIZATION_SCAN_MASK =
+        NEIGHBOR_CHANGE_CONNECTED |
+        NEIGHBOR_CHANGE_NODE |
+        NEIGHBOR_CHANGE_BOOT
+};
+
 typedef struct {
     uint32_t tx_pin;
     uint32_t rx_pin;
 } PioUartPinPair;
-
-typedef struct {
-    bool observed;
-    uint8_t node_id[PICO_UNIQUE_BOARD_ID_SIZE_BYTES];
-    uint32_t boot_id;
-    uint32_t remote_port;
-    uint64_t last_hello_time_us;
-} Neighbor;
 
 typedef struct {
     NetworkPacket packet;
@@ -74,7 +83,6 @@ static const PioUartPinPair pio_uart_pin_pairs[PIO_UART_PORT_COUNT] = {
 static PioUart pio_uarts[PIO_UART_PORT_COUNT] = {0};
 static FramedUart framed_uarts[PIO_UART_PORT_COUNT] = {0};
 static NodeIdentity *node_identity = NULL;
-static Neighbor neighbors[PIO_UART_PORT_COUNT] = {0};
 static LinkStateDatabaseEntry
     link_state_database[NETWORK_LINK_STATE_DATABASE_CAPACITY] = {0};
 static LinkStateTransmissionState
@@ -572,7 +580,9 @@ static void request_link_state_scan(uint32_t local_port) {
 
 static void request_link_state_scans_for_observed_neighbors(void) {
     for (uint32_t local_port = 0; local_port < PIO_UART_PORT_COUNT; local_port++) {
-        if (neighbors[local_port].observed) {
+        const Neighbor *neighbor = neighbor_table_get(local_port);
+
+        if (neighbor->observed) {
             request_link_state_scan(local_port);
         }
     }
@@ -742,8 +752,7 @@ static bool store_received_link_state(
 
 static void update_local_link_state(
     LinkStateDatabaseEntry *entry,
-    NodeIdentity *identity,
-    const Neighbor *current_neighbors
+    NodeIdentity *identity
 ) {
     NetworkPacket packet = NetworkPacket_init_zero;
     memcpy(
@@ -759,7 +768,7 @@ static void update_local_link_state(
     link_state->gateway_connected = local_gateway_connected;
 
     for (uint32_t local_port = 0; local_port < PIO_UART_PORT_COUNT; local_port++) {
-        const Neighbor *neighbor = &current_neighbors[local_port];
+        const Neighbor *neighbor = neighbor_table_get(local_port);
 
         if (!neighbor->observed) {
             continue;
@@ -827,8 +836,9 @@ static void send_link_state(
 static void service_link_state_transmission(uint32_t local_port) {
     LinkStateTransmissionState *transmission =
         &link_state_transmissions[local_port];
+    const Neighbor *neighbor = neighbor_table_get(local_port);
 
-    if (!neighbors[local_port].observed) {
+    if (!neighbor->observed) {
         transmission->scan_requested = false;
         return;
     }
@@ -912,14 +922,22 @@ static void service_link_state_transmission(uint32_t local_port) {
 }
 
 /* ==========================================================================
-   Packet reception and neighbour lifecycle
+   Packet reception and neighbour event handling
    ========================================================================== */
+
+static const char *neighbor_change_name(NeighborChanges changes) {
+    if      (changes & NEIGHBOR_CHANGE_CONNECTED)    { return "Neighbor discovered"; }
+    else if (changes & NEIGHBOR_CHANGE_NODE)         { return "Neighbor replaced"; }
+    else if (changes & NEIGHBOR_CHANGE_BOOT)         { return "Neighbor restarted"; }
+    else if (changes & NEIGHBOR_CHANGE_REMOTE_PORT)  { return "Neighbor port changed"; }
+    else if (changes & NEIGHBOR_CHANGE_DISCONNECTED) { return "Neighbor disconnected"; }
+    return NULL;
+}
 
 static bool handle_received_packet(
     const uint8_t *data,
     size_t length,
-    uint32_t local_port,
-    Neighbor *neighbor
+    uint32_t local_port
 ) {
     NetworkPacket packet = NetworkPacket_init_zero;
     pb_istream_t stream = pb_istream_from_buffer(data, length);
@@ -949,6 +967,7 @@ static bool handle_received_packet(
     }
 
     if (packet.which_payload == NetworkPacket_ack_tag) {
+        const Neighbor *neighbor = neighbor_table_get(local_port);
         handle_received_ack(&packet, local_port, neighbor);
         return false;
     }
@@ -958,57 +977,30 @@ static bool handle_received_packet(
         return false;
     }
 
-    bool node_id_changed = memcmp(
-        neighbor->node_id,
+    NeighborChanges changes = neighbor_table_process_hello(
+        local_port,
         packet.source_node_id,
-        sizeof(neighbor->node_id)
-    ) != 0;
-    bool remote_port_changed =
-        neighbor->remote_port != packet.payload.hello.sender_port;
-    bool neighbor_discovered = !neighbor->observed;
-    bool neighbor_replaced = neighbor->observed && node_id_changed;
-    bool neighbor_restarted =
-        neighbor->observed &&
-        !node_id_changed &&
-        neighbor->boot_id != packet.boot_id;
-    bool adjacency_changed =
-        neighbor_discovered || node_id_changed || remote_port_changed;
+        packet.boot_id,
+        packet.payload.hello.sender_port,
+        time_us_64()
+    );
 
-    const char *neighbor_event = NULL;
-    if (neighbor_discovered) {
-        neighbor_event = "Neighbor discovered";
-    } else if (neighbor_replaced) {
-        neighbor_event = "Neighbor replaced";
-    } else if (neighbor_restarted) {
-        neighbor_event = "Neighbor restarted";
-    } else if (remote_port_changed) {
-        neighbor_event = "Neighbor port changed";
-    }
-
-    if (neighbor_replaced || neighbor_restarted) {
+    if (changes & NEIGHBOR_SYNCHRONIZATION_RESET_MASK) {
         clear_link_state_knowledge(local_port);
         reset_link_state_transmission(local_port);
     }
 
-    memcpy(
-        neighbor->node_id,
-        packet.source_node_id,
-        sizeof(neighbor->node_id)
-    );
-    neighbor->boot_id = packet.boot_id;
-    neighbor->remote_port = packet.payload.hello.sender_port;
-    neighbor->last_hello_time_us = time_us_64();
-    neighbor->observed = true;
-
-    if (neighbor_event != NULL) {
-        print_neighbor(neighbor_event, neighbor, local_port);
+    const char *change_name = neighbor_change_name(changes);
+    if (change_name != NULL) {
+        const Neighbor *neighbor = neighbor_table_get(local_port);
+        print_neighbor(change_name, neighbor, local_port);
     }
 
-    if (neighbor_discovered || neighbor_replaced || neighbor_restarted) {
+    if (changes & NEIGHBOR_SYNCHRONIZATION_SCAN_MASK) {
         request_link_state_scan(local_port);
     }
 
-    return adjacency_changed;
+    return (changes & NEIGHBOR_ADJACENCY_CHANGE_MASK) != 0;
 }
 
 static bool check_neighbor_timeouts(void) {
@@ -1016,24 +1008,31 @@ static bool check_neighbor_timeouts(void) {
     bool adjacency_changed = false;
 
     for (uint32_t local_port = 0; local_port < PIO_UART_PORT_COUNT; local_port++) {
-        Neighbor *neighbor = &neighbors[local_port];
+        NeighborChanges changes = neighbor_table_check_timeout(
+            local_port,
+            current_time_us,
+            NEIGHBOR_TIMEOUT_US
+        );
 
-        if (!neighbor->observed) {
+        if (!(changes & NEIGHBOR_CHANGE_DISCONNECTED)) {
             continue;
         }
 
-        uint64_t elapsed_time_us =
-            current_time_us - neighbor->last_hello_time_us;
+        const Neighbor *neighbor = neighbor_table_get(local_port);
+        print_neighbor(
+            neighbor_change_name(changes),
+            neighbor,
+            local_port
+        );
 
-        if (elapsed_time_us < NEIGHBOR_TIMEOUT_US) {
-            continue;
+        if (changes & NEIGHBOR_SYNCHRONIZATION_RESET_MASK) {
+            clear_link_state_knowledge(local_port);
+            reset_link_state_transmission(local_port);
         }
 
-        print_neighbor("Neighbor disconnected", neighbor, local_port);
-        clear_link_state_knowledge(local_port);
-        reset_link_state_transmission(local_port);
-        neighbor->observed = false;
-        adjacency_changed = true;
+        if (changes & NEIGHBOR_ADJACENCY_CHANGE_MASK) {
+            adjacency_changed = true;
+        }
     }
 
     return adjacency_changed;
@@ -1111,8 +1110,7 @@ void network_set_gateway_connected(bool connected) {
     local_gateway_connected = connected;
     update_local_link_state(
         &link_state_database[LOCAL_LINK_STATE_INDEX],
-        node_identity,
-        neighbors
+        node_identity
     );
     request_link_state_scans_for_observed_neighbors();
 }
@@ -1124,6 +1122,7 @@ void network_init(
     hard_assert(identity != NULL);
     node_identity = identity;
     timing_output_enabled = enable_timing_output;
+    neighbor_table_init();
 
     for (uint32_t local_port = 0; local_port < PIO_UART_PORT_COUNT; local_port++) {
         uint32_t tx_pin = pio_uart_pin_pairs[local_port].tx_pin;
@@ -1147,8 +1146,7 @@ void network_init(
 
     update_local_link_state(
         &link_state_database[LOCAL_LINK_STATE_INDEX],
-        node_identity,
-        neighbors
+        node_identity
     );
 }
 
@@ -1191,8 +1189,7 @@ void network_update(void) {
             bool port_adjacency_changed = handle_received_packet(
                 received_payload,
                 payload_length,
-                local_port,
-                &neighbors[local_port]
+                local_port
             );
             if (port_adjacency_changed) {
                 adjacency_changed = true;
@@ -1217,8 +1214,7 @@ void network_update(void) {
     if (adjacency_changed) {
         update_local_link_state(
             &link_state_database[LOCAL_LINK_STATE_INDEX],
-            node_identity,
-            neighbors
+            node_identity
         );
         request_link_state_scans_for_observed_neighbors();
     }

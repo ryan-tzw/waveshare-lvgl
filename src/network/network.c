@@ -1,6 +1,7 @@
 #include "framed_uart.h"
 #include "gateway_routes.h"
 #include "link_state_database.h"
+#include "link_state_sync.h"
 #include "neighbor_table.h"
 #include "network.h"
 #include "node_identity.h"
@@ -22,7 +23,6 @@
 #define PIO_UART_PORT_COUNT 4
 #define HELLO_INTERVAL_MS 500
 #define NEIGHBOR_TIMEOUT_US 1500000 // 1500 ms
-#define LINK_STATE_RETRY_INTERVAL_US 250000
 
 enum {
     NEIGHBOR_ADJACENCY_CHANGE_MASK =
@@ -45,15 +45,6 @@ typedef struct {
     uint32_t rx_pin;
 } PioUartPinPair;
 
-typedef struct {
-    bool waiting_for_ack;
-    bool scan_requested;
-    uint8_t pending_node_id[PICO_UNIQUE_BOARD_ID_SIZE_BYTES];
-    uint32_t pending_boot_id;
-    uint32_t pending_sequence;
-    uint64_t next_retry_time_us;
-} LinkStateTransmissionState;
-
 static const PioUartPinPair pio_uart_pin_pairs[PIO_UART_PORT_COUNT] = {
     {.tx_pin = 3, .rx_pin = 0},
     {.tx_pin = 4, .rx_pin = 10},
@@ -64,8 +55,6 @@ static const PioUartPinPair pio_uart_pin_pairs[PIO_UART_PORT_COUNT] = {
 static PioUart pio_uarts[PIO_UART_PORT_COUNT] = {0};
 static FramedUart framed_uarts[PIO_UART_PORT_COUNT] = {0};
 static NodeIdentity *node_identity = NULL;
-static LinkStateTransmissionState
-    link_state_transmissions[PIO_UART_PORT_COUNT] = {0};
 static bool timing_output_enabled = false;
 static bool local_gateway_connected = false;
 static bool hello_schedule_started = false;
@@ -349,20 +338,12 @@ static void clear_link_state_knowledge(uint32_t local_port) {
    LINK_STATE synchronization
    ========================================================================== */
 
-static void reset_link_state_transmission(uint32_t local_port) {
-    link_state_transmissions[local_port] = (LinkStateTransmissionState){0};
-}
-
-static void request_link_state_scan(uint32_t local_port) {
-    link_state_transmissions[local_port].scan_requested = true;
-}
-
 static void request_link_state_scans_for_observed_neighbors(void) {
     for (uint32_t local_port = 0; local_port < PIO_UART_PORT_COUNT; local_port++) {
         const Neighbor *neighbor = neighbor_table_get(local_port);
 
         if (neighbor->observed) {
-            request_link_state_scan(local_port);
+            link_state_sync_request_scan(local_port);
         }
     }
 }
@@ -383,46 +364,11 @@ static void handle_received_ack(
         sender_node_id_matches &&
         packet->boot_id == neighbor->boot_id;
 
-    size_t entry_index;
-    NetworkPacket acknowledged_packet;
-    bool entry_exists =
-        link_state_database_find_index(
-            ack->acknowledged_node_id,
-            &entry_index
-        ) &&
-        link_state_database_get_packet(
-            entry_index,
-            &acknowledged_packet
-        );
-    bool acknowledged_version_matches =
-        entry_exists &&
-        acknowledged_packet.boot_id == ack->acknowledged_boot_id &&
-        acknowledged_packet.sequence == ack->acknowledged_sequence;
-
-    if (!sender_matches_neighbor || !acknowledged_version_matches) {
+    if (!sender_matches_neighbor || !link_state_sync_process_ack(local_port, ack)) {
         print_ack("ACK ignored", packet, local_port);
         return;
     }
 
-    link_state_database_mark_known_by_port(entry_index, local_port);
-
-    LinkStateTransmissionState *transmission =
-        &link_state_transmissions[local_port];
-    bool ack_matches_pending_transmission =
-        transmission->waiting_for_ack &&
-        memcmp(
-            ack->acknowledged_node_id,
-            transmission->pending_node_id,
-            sizeof(transmission->pending_node_id)
-        ) == 0 &&
-        ack->acknowledged_boot_id == transmission->pending_boot_id &&
-        ack->acknowledged_sequence == transmission->pending_sequence;
-
-    if (ack_matches_pending_transmission) {
-        transmission->waiting_for_ack = false;
-    }
-
-    request_link_state_scan(local_port);
     print_ack("ACK accepted", packet, local_port);
 }
 
@@ -572,96 +518,14 @@ static void send_link_state(
 }
 
 static void service_link_state_transmission(uint32_t local_port) {
-    LinkStateTransmissionState *transmission =
-        &link_state_transmissions[local_port];
     const Neighbor *neighbor = neighbor_table_get(local_port);
+    NetworkPacket packet;
+    LinkStateSyncAction action = link_state_sync_update(local_port, neighbor->observed, time_us_64(), &packet);
 
-    if (!neighbor->observed) {
-        transmission->scan_requested = false;
-        return;
-    }
+    if (action == LINK_STATE_SYNC_NONE) { return; }
 
-    if (transmission->waiting_for_ack) {
-        size_t entry_index;
-        NetworkPacket pending_packet;
-        bool entry_exists =
-            link_state_database_find_index(
-                transmission->pending_node_id,
-                &entry_index
-            ) &&
-            link_state_database_get_packet(
-                entry_index,
-                &pending_packet
-            );
-        bool pending_version_is_current =
-            entry_exists &&
-            pending_packet.boot_id == transmission->pending_boot_id &&
-            pending_packet.sequence == transmission->pending_sequence;
-        bool pending_version_is_known =
-            entry_exists &&
-            link_state_database_is_known_by_port(entry_index, local_port);
-
-        if (!pending_version_is_current || pending_version_is_known) {
-            transmission->waiting_for_ack = false;
-            transmission->scan_requested = true;
-        } else {
-            uint64_t current_time_us = time_us_64();
-
-            if (current_time_us >= transmission->next_retry_time_us) {
-                send_link_state(
-                    "Retrying",
-                    &pending_packet,
-                    &framed_uarts[local_port],
-                    local_port
-                );
-                transmission->next_retry_time_us =
-                    time_us_64() + LINK_STATE_RETRY_INTERVAL_US;
-            }
-
-            return;
-        }
-    }
-
-    if (!transmission->scan_requested) {
-        return;
-    }
-
-    transmission->scan_requested = false;
-
-    for (
-        size_t entry_index = 0;
-        entry_index < NETWORK_LINK_STATE_DATABASE_CAPACITY;
-        entry_index++
-    ) {
-        NetworkPacket packet;
-
-        if (!link_state_database_get_packet(entry_index, &packet)) {
-            continue;
-        }
-
-        if (link_state_database_is_known_by_port(entry_index, local_port)) {
-            continue;
-        }
-
-        send_link_state(
-            "Sending",
-            &packet,
-            &framed_uarts[local_port],
-            local_port
-        );
-
-        transmission->waiting_for_ack = true;
-        memcpy(
-            transmission->pending_node_id,
-            packet.source_node_id,
-            sizeof(transmission->pending_node_id)
-        );
-        transmission->pending_boot_id = packet.boot_id;
-        transmission->pending_sequence = packet.sequence;
-        transmission->next_retry_time_us =
-            time_us_64() + LINK_STATE_RETRY_INTERVAL_US;
-        return;
-    }
+    const char *event = action == LINK_STATE_SYNC_RETRY ? "Retrying" : "Sending";
+    send_link_state(event, &packet, &framed_uarts[local_port], local_port);
 }
 
 /* ==========================================================================
@@ -730,7 +594,7 @@ static bool handle_received_packet(
 
     if (changes & NEIGHBOR_SYNCHRONIZATION_RESET_MASK) {
         clear_link_state_knowledge(local_port);
-        reset_link_state_transmission(local_port);
+        link_state_sync_reset(local_port);
     }
 
     const char *change_name = neighbor_change_name(changes);
@@ -740,7 +604,7 @@ static bool handle_received_packet(
     }
 
     if (changes & NEIGHBOR_SYNCHRONIZATION_SCAN_MASK) {
-        request_link_state_scan(local_port);
+        link_state_sync_request_scan(local_port);
     }
 
     return (changes & NEIGHBOR_ADJACENCY_CHANGE_MASK) != 0;
@@ -770,7 +634,7 @@ static bool check_neighbor_timeouts(void) {
 
         if (changes & NEIGHBOR_SYNCHRONIZATION_RESET_MASK) {
             clear_link_state_knowledge(local_port);
-            reset_link_state_transmission(local_port);
+            link_state_sync_reset(local_port);
         }
 
         if (changes & NEIGHBOR_ADJACENCY_CHANGE_MASK) {
@@ -821,6 +685,7 @@ void network_init(
     timing_output_enabled = enable_timing_output;
     neighbor_table_init();
     link_state_database_init();
+    link_state_sync_init();
 
     for (uint32_t local_port = 0; local_port < PIO_UART_PORT_COUNT; local_port++) {
         uint32_t tx_pin = pio_uart_pin_pairs[local_port].tx_pin;

@@ -20,9 +20,9 @@
    Network configuration and state
    ========================================================================== */
 
-#define PIO_UART_BAUD 115200
+#define PIO_UART_BAUD       115200
 #define PIO_UART_PORT_COUNT 4
-#define HELLO_INTERVAL_MS 500
+#define HELLO_INTERVAL_MS   500
 #define NEIGHBOR_TIMEOUT_US 1500000 // 1500 ms
 
 enum {
@@ -53,14 +53,15 @@ static const PioUartPinPair pio_uart_pin_pairs[PIO_UART_PORT_COUNT] = {
     { .tx_pin = 23, .rx_pin = 11 }
 };
 
-static PioUart pio_uarts[PIO_UART_PORT_COUNT]       = {0};
-static FramedUart framed_uarts[PIO_UART_PORT_COUNT] = {0};
-static NodeIdentity *node_identity                  = NULL;
-static bool timing_output_enabled                   = false;
-static bool local_gateway_connected                 = false;
-static bool hello_schedule_started                  = false;
-static absolute_time_t next_hello_time;
-static uint8_t received_payload[FRAMED_UART_MAX_PAYLOAD_SIZE];
+static PioUart          pio_uarts[PIO_UART_PORT_COUNT]    = {0};
+static FramedUart       framed_uarts[PIO_UART_PORT_COUNT] = {0};
+static NodeIdentity     *node_identity                    = NULL;
+static bool             local_gateway_connected           = false;
+static absolute_time_t  next_hello_time;
+static uint8_t          received_packet_bytes[FRAMED_UART_MAX_PAYLOAD_SIZE]; // reused while FramedUart ports are sequentially drained
+
+// manually toggle for timing diagnostic output
+static bool timing_output_enabled = false;
 
 /* ==========================================================================
    Basic packet transmission
@@ -400,14 +401,10 @@ void network_init(NodeIdentity *identity, bool enable_timing_output) {
     }
 
     originate_local_link_state(node_identity);
+    next_hello_time = make_timeout_time_ms(HELLO_INTERVAL_MS);
 }
 
 void network_update(void) {
-    if (!hello_schedule_started) {
-        next_hello_time        = make_timeout_time_ms(HELLO_INTERVAL_MS);
-        hello_schedule_started = true;
-    }
-
     size_t payload_length;
     bool adjacency_changed = false;
 
@@ -421,13 +418,13 @@ void network_update(void) {
     for (uint32_t local_port = 0; local_port < PIO_UART_PORT_COUNT; local_port++) {
         while (framed_uart_try_receive(
             &framed_uarts[local_port],
-            received_payload,
-            sizeof(received_payload),
+            received_packet_bytes,
+            sizeof(received_packet_bytes),
             &payload_length
         )) {
             uint64_t packet_start_time_us = time_us_64();
 
-            bool port_adjacency_changed = handle_received_packet(received_payload, payload_length, local_port);
+            bool port_adjacency_changed = handle_received_packet(received_packet_bytes, payload_length, local_port);
             if (port_adjacency_changed) { adjacency_changed = true; }
 
             uint64_t packet_elapsed_time_us = time_us_64() - packet_start_time_us;

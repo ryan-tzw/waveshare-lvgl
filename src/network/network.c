@@ -4,6 +4,7 @@
 #include "link_state_sync.h"
 #include "neighbor_table.h"
 #include "network.h"
+#include "network_diagnostics.h"
 #include "node_identity.h"
 #include "pb_decode.h"
 #include "pb_encode.h"
@@ -148,190 +149,9 @@ static void send_ack(
     ));
 }
 
-/* ==========================================================================
-   Diagnostic output
-   ========================================================================== */
-
-static void print_neighbor(
-    const char *event,
-    const Neighbor *neighbor,
-    uint32_t local_port
-) {
-    printf("%s on port %lu: ", event, (unsigned long)local_port);
-    for (size_t i = 0; i < sizeof(neighbor->node_id); i++) {
-        unsigned int node_id_byte = neighbor->node_id[i];
-        printf("%02x", node_id_byte);
-    }
-
-    printf(
-        " (boot %08lx, remote port %lu)\n\n",
-        (unsigned long)neighbor->boot_id,
-        (unsigned long)neighbor->remote_port
-    );
-}
-
-static void print_link_state(const NetworkPacket *packet) {
-    const LinkState *link_state = &packet->payload.link_state;
-
-    for (size_t i = 0; i < sizeof(packet->source_node_id); i++) {
-        unsigned int node_id_byte = packet->source_node_id[i];
-        printf("%02x", node_id_byte);
-    }
-
-    printf(
-        " (boot %08lx, sequence %lu, gateway %s) -> [",
-        (unsigned long)packet->boot_id,
-        (unsigned long)packet->sequence,
-        link_state->gateway_connected ? "connected" : "disconnected"
-    );
-
-    for (size_t i = 0; i < link_state->neighbors_count; i++) {
-        const LinkStateNeighbor *neighbor = &link_state->neighbors[i];
-
-        if (i > 0) {
-            printf(", ");
-        }
-
-        for (size_t j = 0; j < sizeof(neighbor->node_id); j++) {
-            unsigned int node_id_byte = neighbor->node_id[j];
-            printf("%02x", node_id_byte);
-        }
-
-        printf(
-            " (%lu->%lu)",
-            (unsigned long)neighbor->local_port,
-            (unsigned long)neighbor->remote_port
-        );
-    }
-
-    printf("]\n\n");
-}
-
-void network_print_link_state_database(void) {
-    size_t entry_count = 0;
-
-    for (
-        size_t entry_index = 0;
-        entry_index < NETWORK_LINK_STATE_DATABASE_CAPACITY;
-        entry_index++
-    ) {
-        NetworkPacket packet;
-
-        if (link_state_database_get_packet(entry_index, &packet)) {
-            entry_count++;
-        }
-    }
-
-    printf(
-        "LINK_STATE database (%lu entries)\n",
-        (unsigned long)entry_count
-    );
-
-    if (entry_count == 0) {
-        printf("(empty)\n\n");
-        return;
-    }
-
-    for (
-        size_t entry_index = 0;
-        entry_index < NETWORK_LINK_STATE_DATABASE_CAPACITY;
-        entry_index++
-    ) {
-        NetworkPacket packet;
-
-        if (link_state_database_get_packet(entry_index, &packet)) {
-            print_link_state(&packet);
-        }
-    }
-}
-
-void network_print_gateway_routes(void) {
-    size_t route_count = gateway_routes_get_count();
-    const char *route_word = route_count == 1 ? "route" : "routes";
-
-    printf(
-        "Gateway routes (%lu %s)\n",
-        (unsigned long)route_count,
-        route_word
-    );
-
-    if (route_count == 0) {
-        printf("(none)\n\n");
-        return;
-    }
-
-    for (
-        size_t route_index = 0;
-        route_index < route_count;
-        route_index++
-    ) {
-        GatewayRoute route;
-        bool route_exists = gateway_routes_get(route_index, &route);
-        hard_assert(route_exists);
-
-        for (size_t i = 0; i < sizeof(route.node_id); i++) {
-            unsigned int node_id_byte = route.node_id[i];
-            printf("%02x", node_id_byte);
-        }
-
-        if (route.is_local) {
-            printf(" -> local, 0 hops\n");
-        } else {
-            const char *hop_word = route.hop_count == 1 ? "hop" : "hops";
-            printf(
-                " -> port %lu, %lu %s\n",
-                (unsigned long)route.local_port,
-                (unsigned long)route.hop_count,
-                hop_word
-            );
-        }
-    }
-
-    printf("\n");
-}
-
-static void print_ack(
-    const char *event,
-    const NetworkPacket *packet,
-    uint32_t local_port
-) {
-    const Ack *ack = &packet->payload.ack;
-
-    printf(
-        "%s on port %lu from ",
-        event,
-        (unsigned long)local_port
-    );
-    for (size_t i = 0; i < sizeof(packet->source_node_id); i++) {
-        unsigned int node_id_byte = packet->source_node_id[i];
-        printf("%02x", node_id_byte);
-    }
-
-    printf(
-        " (boot %08lx)\n",
-        (unsigned long)packet->boot_id
-    );
-
-    printf("Acknowledged: ");
-    for (size_t i = 0; i < sizeof(ack->acknowledged_node_id); i++) {
-        unsigned int node_id_byte = ack->acknowledged_node_id[i];
-        printf("%02x", node_id_byte);
-    }
-
-    printf(
-        " (boot %08lx, sequence %lu)\n\n",
-        (unsigned long)ack->acknowledged_boot_id,
-        (unsigned long)ack->acknowledged_sequence
-    );
-}
-
 static void clear_link_state_knowledge(uint32_t local_port) {
     link_state_database_clear_port_knowledge(local_port);
-
-    printf(
-        "LINK_STATE knowledge cleared for port %lu\n\n",
-        (unsigned long)local_port
-    );
+    network_diagnostics_print_knowledge_cleared(local_port);
 }
 
 /* ==========================================================================
@@ -365,11 +185,11 @@ static void handle_received_ack(
         packet->boot_id == neighbor->boot_id;
 
     if (!sender_matches_neighbor || !link_state_sync_process_ack(local_port, ack)) {
-        print_ack("ACK ignored", packet, local_port);
+        network_diagnostics_print_ack("ACK ignored", packet, local_port);
         return;
     }
 
-    print_ack("ACK accepted", packet, local_port);
+    network_diagnostics_print_ack("ACK accepted", packet, local_port);
 }
 
 static bool store_received_link_state(
@@ -389,7 +209,7 @@ static bool store_received_link_state(
                 "Remote LINK_STATE stored on port %lu\n",
                 (unsigned long)local_port
             );
-            print_link_state(packet);
+            network_diagnostics_print_link_state(packet);
             break;
 
         case LINK_STATE_STORE_UPDATED:
@@ -398,7 +218,7 @@ static bool store_received_link_state(
                 "Remote LINK_STATE updated on port %lu\n",
                 (unsigned long)local_port
             );
-            print_link_state(packet);
+            network_diagnostics_print_link_state(packet);
             break;
 
         case LINK_STATE_STORE_DUPLICATE:
@@ -479,7 +299,7 @@ static void update_local_link_state(NodeIdentity *identity) {
     gateway_routes_recalculate(PIO_UART_PORT_COUNT);
 
     printf("Local LINK_STATE updated\n");
-    print_link_state(&packet);
+    network_diagnostics_print_link_state(&packet);
 }
 
 static void send_link_state(
@@ -514,7 +334,7 @@ static void send_link_state(
         event,
         (unsigned long)local_port
     );
-    print_link_state(packet);
+    network_diagnostics_print_link_state(packet);
 }
 
 static void service_link_state_transmission(uint32_t local_port) {
@@ -600,7 +420,7 @@ static bool handle_received_packet(
     const char *change_name = neighbor_change_name(changes);
     if (change_name != NULL) {
         const Neighbor *neighbor = neighbor_table_get(local_port);
-        print_neighbor(change_name, neighbor, local_port);
+        network_diagnostics_print_neighbor(change_name, neighbor, local_port);
     }
 
     if (changes & NEIGHBOR_SYNCHRONIZATION_SCAN_MASK) {
@@ -626,7 +446,7 @@ static bool check_neighbor_timeouts(void) {
         }
 
         const Neighbor *neighbor = neighbor_table_get(local_port);
-        print_neighbor(
+        network_diagnostics_print_neighbor(
             neighbor_change_name(changes),
             neighbor,
             local_port
@@ -648,6 +468,14 @@ static bool check_neighbor_timeouts(void) {
 /* ==========================================================================
    Public network interface
    ========================================================================== */
+
+void network_print_link_state_database(void) {
+    network_diagnostics_print_link_state_database();
+}
+
+void network_print_gateway_routes(void) {
+    network_diagnostics_print_gateway_routes();
+}
 
 bool network_get_link_state_database_packet(
     size_t entry_index,

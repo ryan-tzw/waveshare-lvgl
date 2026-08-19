@@ -19,23 +19,23 @@ typedef struct {
     bool     scan_requested;
 } LinkStateSyncState;
 
-static LinkStateSyncState states[LINK_STATE_SYNC_PORT_COUNT] = {0};
+static LinkStateSyncState port_states[LINK_STATE_SYNC_PORT_COUNT] = {0};
 
-static LinkStateSyncState *get_state(uint32_t local_port) {
+static LinkStateSyncState *get_port_state(uint32_t local_port) {
     hard_assert(local_port < LINK_STATE_SYNC_PORT_COUNT);
-    return &states[local_port];
+    return &port_states[local_port];
 }
 
 void link_state_sync_init(void) {
-    memset(states, 0, sizeof(states));
+    memset(port_states, 0, sizeof(port_states));
 }
 
 void link_state_sync_reset(uint32_t local_port) {
-    *get_state(local_port) = (LinkStateSyncState){0};
+    *get_port_state(local_port) = (LinkStateSyncState){0};
 }
 
 void link_state_sync_request_scan(uint32_t local_port) {
-    get_state(local_port)->scan_requested = true;
+    get_port_state(local_port)->scan_requested = true;
 }
 
 /* ==========================================================================
@@ -59,16 +59,16 @@ bool link_state_sync_process_ack(uint32_t local_port, const Ack *ack) {
 
     link_state_database_mark_known_by_port(entry_index, local_port);
 
-    LinkStateSyncState *state = get_state(local_port);
+    LinkStateSyncState *port_state = get_port_state(local_port);
     bool pending_version_matches =
-        state->waiting_for_ack &&
-        memcmp(ack->acknowledged_node_id, state->pending_node_id, sizeof(state->pending_node_id)) == 0 &&
-        ack->acknowledged_boot_id == state->pending_boot_id &&
-        ack->acknowledged_sequence == state->pending_sequence;
+        port_state->waiting_for_ack &&
+        memcmp(ack->acknowledged_node_id, port_state->pending_node_id, sizeof(port_state->pending_node_id)) == 0 &&
+        ack->acknowledged_boot_id == port_state->pending_boot_id &&
+        ack->acknowledged_sequence == port_state->pending_sequence;
 
-    if (pending_version_matches) { state->waiting_for_ack = false; }
+    if (pending_version_matches) { port_state->waiting_for_ack = false; }
 
-    state->scan_requested = true;
+    port_state->scan_requested = true;
     return true;
 }
 
@@ -80,46 +80,46 @@ LinkStateSyncAction link_state_sync_prepare_packet_for_port_if_needed(
     uint32_t local_port,
     bool neighbor_observed,
     uint64_t current_time_us,
-    NetworkPacket *packet
+    NetworkPacket *packet_to_send
 ) {
-    if (packet == NULL) { return LINK_STATE_SYNC_NONE; }
+    if (packet_to_send == NULL) { return LINK_STATE_SYNC_NONE; }
 
-    LinkStateSyncState *state = get_state(local_port);
+    LinkStateSyncState *port_state = get_port_state(local_port);
 
     if (!neighbor_observed) {
-        state->scan_requested = false;
+        port_state->scan_requested = false;
         return LINK_STATE_SYNC_NONE;
     }
 
-    if (state->waiting_for_ack) {
+    if (port_state->waiting_for_ack) {
         size_t entry_index;
         NetworkPacket pending_packet;
         bool entry_exists =
-            link_state_database_find_index(state->pending_node_id, &entry_index) &&
+            link_state_database_find_index(port_state->pending_node_id, &entry_index) &&
             link_state_database_get_packet(entry_index, &pending_packet);
         bool pending_version_is_current =
             entry_exists &&
-            pending_packet.boot_id == state->pending_boot_id &&
-            pending_packet.sequence == state->pending_sequence;
+            pending_packet.boot_id == port_state->pending_boot_id &&
+            pending_packet.sequence == port_state->pending_sequence;
         bool pending_version_is_known =
             entry_exists &&
             link_state_database_is_known_by_port(entry_index, local_port);
 
         if (!pending_version_is_current || pending_version_is_known) {
-            state->waiting_for_ack = false;
-            state->scan_requested = true;
+            port_state->waiting_for_ack = false;
+            port_state->scan_requested = true;
         } else {
-            if (current_time_us < state->next_retry_time_us) { return LINK_STATE_SYNC_NONE; }
+            if (current_time_us < port_state->next_retry_time_us) { return LINK_STATE_SYNC_NONE; }
 
-            *packet = pending_packet;
-            state->next_retry_time_us = current_time_us + LINK_STATE_RETRY_INTERVAL_US;
+            *packet_to_send = pending_packet;
+            port_state->next_retry_time_us = current_time_us + LINK_STATE_RETRY_INTERVAL_US;
             return LINK_STATE_SYNC_RETRY;
         }
     }
 
-    if (!state->scan_requested) { return LINK_STATE_SYNC_NONE; }
+    if (!port_state->scan_requested) { return LINK_STATE_SYNC_NONE; }
 
-    state->scan_requested = false;
+    port_state->scan_requested = false;
 
     for (size_t entry_index = 0; entry_index < NETWORK_LINK_STATE_DATABASE_CAPACITY; entry_index++) {
         NetworkPacket database_packet;
@@ -127,12 +127,12 @@ LinkStateSyncAction link_state_sync_prepare_packet_for_port_if_needed(
         if (!link_state_database_get_packet(entry_index, &database_packet)) { continue; }
         if (link_state_database_is_known_by_port(entry_index, local_port)) { continue; }
 
-        state->waiting_for_ack = true;
-        memcpy(state->pending_node_id, database_packet.source_node_id, sizeof(state->pending_node_id));
-        state->pending_boot_id    = database_packet.boot_id;
-        state->pending_sequence   = database_packet.sequence;
-        state->next_retry_time_us = current_time_us + LINK_STATE_RETRY_INTERVAL_US;
-        *packet = database_packet;
+        port_state->waiting_for_ack = true;
+        memcpy(port_state->pending_node_id, database_packet.source_node_id, sizeof(port_state->pending_node_id));
+        port_state->pending_boot_id    = database_packet.boot_id;
+        port_state->pending_sequence   = database_packet.sequence;
+        port_state->next_retry_time_us = current_time_us + LINK_STATE_RETRY_INTERVAL_US;
+        *packet_to_send = database_packet;
         return LINK_STATE_SYNC_SEND;
     }
 

@@ -30,13 +30,13 @@ NeighborChanges neighbor_table_process_hello(
     bool node_id_changed     = memcmp(neighbor->node_id, node_id, sizeof(neighbor->node_id)) != 0;
     bool boot_id_changed     = !node_id_changed && neighbor->boot_id != boot_id;
     bool remote_port_changed = neighbor->remote_port != remote_port;
-    NeighborChanges changes  = NEIGHBOR_CHANGE_NONE;
+    NeighborChanges neighbor_changes = NEIGHBOR_CHANGE_NONE;
 
-    if (!neighbor->observed) { changes |= NEIGHBOR_CHANGE_CONNECTED; } 
+    if (!neighbor->observed) { neighbor_changes |= NEIGHBOR_CHANGE_CONNECTED; }
     else {
-        if      (node_id_changed)     { changes |= NEIGHBOR_CHANGE_NODE; }
-        else if (boot_id_changed)     { changes |= NEIGHBOR_CHANGE_BOOT; }
-        if      (remote_port_changed) { changes |= NEIGHBOR_CHANGE_REMOTE_PORT; }
+        if      (node_id_changed)     { neighbor_changes |= NEIGHBOR_CHANGE_NODE; }
+        else if (boot_id_changed)     { neighbor_changes |= NEIGHBOR_CHANGE_BOOT; }
+        if      (remote_port_changed) { neighbor_changes |= NEIGHBOR_CHANGE_REMOTE_PORT; }
     }
 
     memcpy(neighbor->node_id, node_id, sizeof(neighbor->node_id));
@@ -45,7 +45,7 @@ NeighborChanges neighbor_table_process_hello(
     neighbor->last_hello_time_us = received_time_us;
     neighbor->observed           = true;
 
-    return changes;
+    return neighbor_changes;
 }
 
 NeighborChanges neighbor_table_check_timeout(

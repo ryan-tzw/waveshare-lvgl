@@ -30,7 +30,7 @@ static void send_gateway_hello(const NodeIdentity *identity) {
 }
 
 /*
- * Send the initial database contents after WebUSB connects. Scan entries in index order, 
+ * Send the initial database contents after WebUSB connects. Scan entries in index order,
  * skip empty slots, and enqueue one LINK_STATE per call.
  */
 static void send_next_initial_link_state_if_possible(void) {
@@ -38,10 +38,10 @@ static void send_next_initial_link_state_if_possible(void) {
 
     while (next_initial_database_entry_index < NETWORK_LINK_STATE_DATABASE_CAPACITY) {
         NetworkPacket packet;
-        size_t entry_index = next_initial_database_entry_index;
+        size_t database_entry_index = next_initial_database_entry_index;
         next_initial_database_entry_index++;
 
-        if (!network_get_link_state_database_packet(entry_index, &packet)) { continue; }
+        if (!network_get_link_state_database_packet(database_entry_index, &packet)) { continue; }
 
         hard_assert(packet.which_payload == NetworkPacket_link_state_tag);
         encode_and_queue_network_packet(&packet);
@@ -52,18 +52,18 @@ static void send_next_initial_link_state_if_possible(void) {
 }
 
 /*
- * After initial database scan, consume one pending database-change
+ * After the initial database transfer, consume one pending database-change
  * notification and queue that entry's latest LINK_STATE whenever WebUSB is
- * ready. Repeated changes to one entry are coalesced.
+ * ready. Changes are coalesced independently for each database entry.
  */
 static void send_next_changed_link_state_if_possible(void) {
     if (!web_usb_can_send()) { return; }
 
-    size_t entry_index;
-    if (!network_take_link_state_database_update(&entry_index)) { return; }
+    size_t database_entry_index;
+    if (!network_take_link_state_database_update(&database_entry_index)) { return; }
 
     NetworkPacket packet;
-    hard_assert( network_get_link_state_database_packet(entry_index, &packet) );
+    hard_assert( network_get_link_state_database_packet(database_entry_index, &packet) );
     hard_assert( packet.which_payload == NetworkPacket_link_state_tag );
 
     encode_and_queue_network_packet(&packet);
@@ -72,11 +72,11 @@ static void send_next_changed_link_state_if_possible(void) {
 void gateway_update(const NodeIdentity *identity) {
     hard_assert(identity != NULL);
 
-    bool connected;
-    if (web_usb_take_connection_change(&connected)) {
-        network_set_gateway_connected(connected);
+    bool web_usb_connected;
+    if (web_usb_take_connection_change(&web_usb_connected)) {
+        network_set_gateway_connected(web_usb_connected);
 
-        if (!connected) {
+        if (!web_usb_connected) {
             initial_database_transfer_active = false;
             next_initial_database_entry_index  = 0;
             return;

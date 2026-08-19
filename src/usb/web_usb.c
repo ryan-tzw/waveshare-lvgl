@@ -74,10 +74,10 @@ void web_usb_update(void) {
         write_length = available_space;
     }
 
-    uint32_t written = tud_vendor_write(&tx_buffer[tx_offset], write_length);
-    tx_offset += written;
+    uint32_t bytes_written = tud_vendor_write(&tx_buffer[tx_offset], write_length);
+    tx_offset += bytes_written;
 
-    if (written > 0) {
+    if (bytes_written > 0) {
         tud_vendor_write_flush();
     }
 

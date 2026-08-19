@@ -88,7 +88,7 @@ static bool create_boot_id(uint32_t *boot_id) {
     memcpy(page + record_offset_in_page, &record, sizeof(record));
 
     // Prevent interrupt handlers from reading flash while XIP is unavailable
-    uint32_t interrupts = save_and_disable_interrupts();
+    uint32_t saved_interrupt_state = save_and_disable_interrupts();
 
     if (sector_is_full) {
         flash_range_erase(BOOT_RECORD_FLASH_OFFSET, FLASH_SECTOR_SIZE);
@@ -100,7 +100,7 @@ static bool create_boot_id(uint32_t *boot_id) {
         sizeof(page)
     );
 
-    restore_interrupts(interrupts);
+    restore_interrupts(saved_interrupt_state);
 
     BootRecord stored_record;
     read_boot_record(empty_record_index, &stored_record);

@@ -149,9 +149,9 @@ static void handle_received_ack(const NetworkPacket *packet, uint32_t local_port
 }
 
 static bool process_received_link_state(const NetworkPacket *packet, uint32_t local_port) {
-    LinkStateStoreResult result = link_state_database_store_received(packet, node_identity->node_id.id, local_port);
+    LinkStateStoreResult store_result = link_state_database_store_received(packet, node_identity->node_id.id, local_port);
 
-    switch (result) {
+    switch (store_result) {
         case LINK_STATE_STORE_NEW: {
             gateway_routes_recalculate(PIO_UART_PORT_COUNT);
             printf(
@@ -243,10 +243,10 @@ static void originate_local_link_state(NodeIdentity *identity) {
 
 static void send_link_state_for_port_if_needed(uint32_t local_port) {
     NetworkPacket packet;
-    const Neighbor *neighbor   = neighbor_table_get(local_port);
-    LinkStateSyncAction action = link_state_sync_prepare_packet_for_port_if_needed(local_port, neighbor->observed, time_us_64(), &packet);
+    const Neighbor *neighbor        = neighbor_table_get(local_port);
+    LinkStateSyncAction sync_action = link_state_sync_prepare_packet_for_port_if_needed(local_port, neighbor->observed, time_us_64(), &packet);
 
-    if (action == LINK_STATE_SYNC_NONE) { return; }
+    if (sync_action == LINK_STATE_SYNC_NONE) { return; }
 
     hard_assert( packet.which_payload == NetworkPacket_link_state_tag );
 
@@ -258,7 +258,7 @@ static void send_link_state_for_port_if_needed(uint32_t local_port) {
 
     printf(
         "%s LINK_STATE on port %lu\n",
-        action == LINK_STATE_SYNC_RETRY ? "Retrying" : "Sending",
+        sync_action == LINK_STATE_SYNC_RETRY ? "Retrying" : "Sending",
         (unsigned long)local_port
     );
     network_diagnostics_print_link_state(&packet);
@@ -268,12 +268,12 @@ static void send_link_state_for_port_if_needed(uint32_t local_port) {
    Packet reception and neighbour event handling
    ========================================================================== */
 
-static const char *neighbor_change_name(NeighborChanges changes) {
-    if      (changes & NEIGHBOR_CHANGE_CONNECTED)    { return "Neighbor discovered"; }
-    else if (changes & NEIGHBOR_CHANGE_NODE)         { return "Neighbor replaced"; }
-    else if (changes & NEIGHBOR_CHANGE_BOOT)         { return "Neighbor restarted"; }
-    else if (changes & NEIGHBOR_CHANGE_REMOTE_PORT)  { return "Neighbor port changed"; }
-    else if (changes & NEIGHBOR_CHANGE_DISCONNECTED) { return "Neighbor disconnected"; }
+static const char *neighbor_change_name(NeighborChanges neighbor_changes) {
+    if      (neighbor_changes & NEIGHBOR_CHANGE_CONNECTED)    { return "Neighbor discovered"; }
+    else if (neighbor_changes & NEIGHBOR_CHANGE_NODE)         { return "Neighbor replaced"; }
+    else if (neighbor_changes & NEIGHBOR_CHANGE_BOOT)         { return "Neighbor restarted"; }
+    else if (neighbor_changes & NEIGHBOR_CHANGE_REMOTE_PORT)  { return "Neighbor port changed"; }
+    else if (neighbor_changes & NEIGHBOR_CHANGE_DISCONNECTED) { return "Neighbor disconnected"; }
     return NULL;
 }
 
@@ -308,7 +308,7 @@ static bool handle_received_packet(const uint8_t *data, size_t length, uint32_t 
         return false;
     }
 
-    NeighborChanges changes = neighbor_table_process_hello(
+    NeighborChanges neighbor_changes = neighbor_table_process_hello(
         local_port,
         packet.source_node_id,
         packet.boot_id,
@@ -316,22 +316,22 @@ static bool handle_received_packet(const uint8_t *data, size_t length, uint32_t 
         time_us_64()
     );
 
-    if (changes & NEIGHBOR_SYNCHRONIZATION_RESET_MASK) {
+    if (neighbor_changes & NEIGHBOR_SYNCHRONIZATION_RESET_MASK) {
         clear_link_state_knowledge_for_port(local_port);
         link_state_sync_reset(local_port);
     }
 
-    const char *change_name = neighbor_change_name(changes);
-    if (change_name != NULL) {
+    const char *neighbor_event_name = neighbor_change_name(neighbor_changes);
+    if (neighbor_event_name != NULL) {
         const Neighbor *neighbor = neighbor_table_get(local_port);
-        network_diagnostics_print_neighbor(change_name, neighbor, local_port);
+        network_diagnostics_print_neighbor(neighbor_event_name, neighbor, local_port);
     }
 
-    if (changes & NEIGHBOR_SYNCHRONIZATION_SCAN_MASK) {
+    if (neighbor_changes & NEIGHBOR_SYNCHRONIZATION_SCAN_MASK) {
         link_state_sync_request_scan(local_port);
     }
 
-    return (changes & NEIGHBOR_ADJACENCY_CHANGE_MASK) != 0;
+    return (neighbor_changes & NEIGHBOR_ADJACENCY_CHANGE_MASK) != 0;
 }
 
 static bool disconnect_timed_out_neighbors(void) {
@@ -339,19 +339,19 @@ static bool disconnect_timed_out_neighbors(void) {
     bool neighbor_disconnected = false;
 
     for (uint32_t local_port = 0; local_port < PIO_UART_PORT_COUNT; local_port++) {
-        NeighborChanges changes = neighbor_table_check_timeout(local_port, current_time_us, NEIGHBOR_TIMEOUT_US);
+        NeighborChanges neighbor_changes = neighbor_table_check_timeout(local_port, current_time_us, NEIGHBOR_TIMEOUT_US);
 
-        if (!(changes & NEIGHBOR_CHANGE_DISCONNECTED)) { continue; }
+        if (!(neighbor_changes & NEIGHBOR_CHANGE_DISCONNECTED)) { continue; }
 
         const Neighbor *neighbor = neighbor_table_get(local_port);
-        network_diagnostics_print_neighbor(neighbor_change_name(changes), neighbor, local_port);
+        network_diagnostics_print_neighbor(neighbor_change_name(neighbor_changes), neighbor, local_port);
 
-        if (changes & NEIGHBOR_SYNCHRONIZATION_RESET_MASK) {
+        if (neighbor_changes & NEIGHBOR_SYNCHRONIZATION_RESET_MASK) {
             clear_link_state_knowledge_for_port(local_port);
             link_state_sync_reset(local_port);
         }
 
-        if (changes & NEIGHBOR_ADJACENCY_CHANGE_MASK) {
+        if (neighbor_changes & NEIGHBOR_ADJACENCY_CHANGE_MASK) {
             neighbor_disconnected = true;
         }
     }

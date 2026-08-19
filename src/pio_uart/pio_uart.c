@@ -103,7 +103,7 @@ bool pio_uart_init(PioUart *uart, uint tx_pin, uint rx_pin, uint baud_rate) {
         Attempt to claim SMs
        ========================= */
 
-    const bool tx_success = pio_claim_free_sm_and_add_program_for_gpio_range(
+    const bool tx_program_claimed = pio_claim_free_sm_and_add_program_for_gpio_range(
         &uart_tx_program,
         &uart->tx_pio,
         &uart->tx_sm,
@@ -112,9 +112,9 @@ bool pio_uart_init(PioUart *uart, uint tx_pin, uint rx_pin, uint baud_rate) {
         1,
         true
     );
-    if (!tx_success) { return false; }
+    if (!tx_program_claimed) { return false; }
 
-    const bool rx_success = pio_claim_free_sm_and_add_program_for_gpio_range(
+    const bool rx_program_claimed = pio_claim_free_sm_and_add_program_for_gpio_range(
         &uart_rx_program,
         &uart->rx_pio,
         &uart->rx_sm,
@@ -123,7 +123,7 @@ bool pio_uart_init(PioUart *uart, uint tx_pin, uint rx_pin, uint baud_rate) {
         1,
         true
     );
-    if (!rx_success) {
+    if (!rx_program_claimed) {
         pio_remove_program_and_unclaim_sm(&uart_tx_program, uart->tx_pio, uart->tx_sm, uart->tx_offset);
         return false;
     }

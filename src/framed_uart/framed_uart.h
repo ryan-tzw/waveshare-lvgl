@@ -14,11 +14,11 @@
 
 typedef struct {
     PioUart *uart;
-    uint8_t tx_data_buffer[FRAMED_UART_MAX_DATA_SIZE];
-    uint8_t tx_buffer[FRAMED_UART_MAX_FRAME_SIZE];
-    uint8_t rx_buffer[FRAMED_UART_MAX_ENCODED_SIZE];
-    uint8_t rx_data_buffer[FRAMED_UART_MAX_DATA_SIZE];
-    size_t rx_length;
+    uint8_t tx_unencoded_buffer[FRAMED_UART_MAX_DATA_SIZE];
+    uint8_t tx_encoded_buffer[FRAMED_UART_MAX_FRAME_SIZE];
+    uint8_t rx_encoded_buffer[FRAMED_UART_MAX_ENCODED_SIZE];
+    uint8_t rx_decoded_buffer[FRAMED_UART_MAX_DATA_SIZE];
+    size_t rx_encoded_length;
     bool discarding_frame;
     bool initialized;
 } FramedUart;

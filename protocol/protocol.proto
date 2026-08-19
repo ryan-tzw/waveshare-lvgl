@@ -23,6 +23,26 @@ message Ack {
 
 message GatewayHello {}
 
+message BulbState {}
+
+message BatteryState {}
+
+message SwitchState {}
+
+message DeviceState {
+    oneof state {
+        BulbState bulb = 1;
+        BatteryState battery = 2;
+        SwitchState switch = 3;
+    }
+}
+
+message RoutedMessage {
+    bytes destination_gateway_node_id = 1;
+    uint32 remaining_hops = 2;
+    DeviceState device_state = 3;
+}
+
 message NetworkPacket {
     bytes source_node_id = 1;
     fixed32 boot_id = 2;
@@ -33,5 +53,6 @@ message NetworkPacket {
         LinkState link_state = 5;
         Ack ack = 6;
         GatewayHello gateway_hello = 7;
+        RoutedMessage routed_message = 8;
     }
 }

@@ -31,8 +31,7 @@ static bool link_has_reciprocal_observation(
     const NetworkPacket     *neighbor_packet,
     uint32_t port_count
 ) {
-    if (
-        source_observation->local_port >= port_count ||
+    if (source_observation->local_port >= port_count ||
         source_observation->remote_port >= port_count
     ) { return false; }
 
@@ -71,9 +70,9 @@ void gateway_routes_recalculate(uint32_t port_count) {
     size_t queue_read_index = 0;
     size_t queue_length     = 1;
     traversal_queue[0] = (GatewayRouteTraversal){
-        .database_index = LINK_STATE_DATABASE_LOCAL_INDEX,
+        .database_index   = LINK_STATE_DATABASE_LOCAL_INDEX,
         .first_local_port = 0,
-        .hop_count = 0
+        .hop_count        = 0
     };
     visited_database_entries[LINK_STATE_DATABASE_LOCAL_INDEX] = true;
 
@@ -116,9 +115,9 @@ void gateway_routes_recalculate(uint32_t port_count) {
 
             visited_database_entries[neighbor_database_index] = true;
             traversal_queue[queue_length] = (GatewayRouteTraversal){
-                .database_index = neighbor_database_index,
+                .database_index   = neighbor_database_index,
                 .first_local_port = first_local_port,
-                .hop_count = current_traversal.hop_count + 1
+                .hop_count        = current_traversal.hop_count + 1
             };
             queue_length++;
         }

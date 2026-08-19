@@ -27,19 +27,14 @@ static bool boot_record_is_valid(const BootRecord *record) {
 
 static void read_boot_record(size_t record_index, BootRecord *record) {
     const uint8_t *flash_address = (const uint8_t *)(XIP_BASE + BOOT_RECORD_FLASH_OFFSET);
-
-    memcpy(
-        record,
-        flash_address + record_index * sizeof(BootRecord),
-        sizeof(BootRecord)
-    );
+    memcpy(record, flash_address + record_index * sizeof(BootRecord), sizeof(BootRecord));
 }
 
 static bool create_boot_id(uint32_t *boot_id) {
-    size_t record_count = FLASH_SECTOR_SIZE / sizeof(BootRecord);
-    size_t empty_record_index = record_count;
-    bool valid_record_found = false;
-    uint32_t highest_boot_id = 0;
+    size_t   record_count       = FLASH_SECTOR_SIZE / sizeof(BootRecord);
+    size_t   empty_record_index = record_count;
+    bool     valid_record_found = false;
+    uint32_t highest_boot_id    = 0;
 
     for (size_t record_index = 0; record_index < record_count; record_index++) {
         BootRecord record;
@@ -58,23 +53,18 @@ static bool create_boot_id(uint32_t *boot_id) {
         }
     }
 
-    if (valid_record_found && highest_boot_id == UINT32_MAX) {
-        return false;
-    }
+    if (valid_record_found && highest_boot_id == UINT32_MAX) { return false; }
 
-    if (valid_record_found) {
-        *boot_id = highest_boot_id + 1;
-    } else {
-        *boot_id = 1;
-    }
+    if (valid_record_found) { *boot_id = highest_boot_id + 1; } 
+    else                    { *boot_id = 1; }
 
     bool sector_is_full = empty_record_index == record_count;
     if (sector_is_full) {
         empty_record_index = 0;
     }
 
-    size_t record_offset = empty_record_index * sizeof(BootRecord);
-    size_t page_offset = record_offset - (record_offset % FLASH_PAGE_SIZE);
+    size_t record_offset         = empty_record_index * sizeof(BootRecord);
+    size_t page_offset           = record_offset - (record_offset % FLASH_PAGE_SIZE);
     size_t record_offset_in_page = record_offset % FLASH_PAGE_SIZE;
 
     uint8_t page[FLASH_PAGE_SIZE];
@@ -82,7 +72,7 @@ static bool create_boot_id(uint32_t *boot_id) {
     memset(page, UINT8_MAX, sizeof(page));
 
     BootRecord record = {
-        .boot_id = *boot_id,
+        .boot_id         = *boot_id,
         .boot_id_inverse = ~*boot_id,
     };
     memcpy(page + record_offset_in_page, &record, sizeof(record));
@@ -110,14 +100,10 @@ static bool create_boot_id(uint32_t *boot_id) {
 }
 
 bool node_identity_init(NodeIdentity *identity) {
-    if (identity == NULL || identity->initialized) {
-        return false;
-    }
-
+    if (identity == NULL || identity->initialized) { return false; }
+    
     uint32_t boot_id;
-    if (!create_boot_id(&boot_id)) {
-        return false;
-    }
+    if (!create_boot_id(&boot_id)) { return false; }
 
     pico_get_unique_board_id(&identity->node_id);
     identity->boot_id = boot_id;

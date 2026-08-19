@@ -28,28 +28,22 @@ int main(void) {
     /* Init touch screen */
     CST816D_init(CST816D_Point_Mode);
 
-    /* Init IMU */
-    // QMI8658_init();
-
-    /* Init LVGL */
     init_lvgl();
     init_widgets();
 
     tusb_rhport_init_t dev_init = {
-        .role = TUSB_ROLE_DEVICE,
+        .role  = TUSB_ROLE_DEVICE,
         .speed = TUSB_SPEED_AUTO
     };
     tusb_init(BOARD_TUD_RHPORT, &dev_init);
 
-    absolute_time_t next_timing_report_time = make_timeout_time_ms(
-        TIMING_REPORT_INTERVAL_MS
-    );
-    uint64_t loop_start_time_us = time_us_64();
-    uint64_t total_work_time_us = 0;
+    absolute_time_t next_timing_report_time = make_timeout_time_ms(TIMING_REPORT_INTERVAL_MS);
+    uint64_t loop_start_time_us   = time_us_64();
+    uint64_t total_work_time_us   = 0;
     uint64_t maximum_work_time_us = 0;
-    uint64_t total_loop_time_us = 0;
+    uint64_t total_loop_time_us   = 0;
     uint64_t maximum_loop_time_us = 0;
-    uint32_t loop_count = 0;
+    uint32_t loop_count           = 0;
 
     while (1) {
         if (take_link_state_database_print_request()) {
@@ -73,13 +67,8 @@ int main(void) {
         total_loop_time_us += loop_time_us;
         loop_count++;
 
-        if (work_time_us > maximum_work_time_us) {
-            maximum_work_time_us = work_time_us;
-        }
-
-        if (loop_time_us > maximum_loop_time_us) {
-            maximum_loop_time_us = loop_time_us;
-        }
+        if (work_time_us > maximum_work_time_us) { maximum_work_time_us = work_time_us; }
+        if (loop_time_us > maximum_loop_time_us) { maximum_loop_time_us = loop_time_us; }
 
         if (time_reached(next_timing_report_time)) {
             uint64_t average_work_time_us = total_work_time_us / loop_count;
@@ -97,14 +86,12 @@ int main(void) {
                 );
             }
 
-            total_work_time_us = 0;
-            maximum_work_time_us = 0;
-            total_loop_time_us = 0;
-            maximum_loop_time_us = 0;
-            loop_count = 0;
-            next_timing_report_time = make_timeout_time_ms(
-                TIMING_REPORT_INTERVAL_MS
-            );
+            total_work_time_us      = 0;
+            maximum_work_time_us    = 0;
+            total_loop_time_us      = 0;
+            maximum_loop_time_us    = 0;
+            loop_count              = 0;
+            next_timing_report_time = make_timeout_time_ms(TIMING_REPORT_INTERVAL_MS);
         }
 
         loop_start_time_us = time_us_64();

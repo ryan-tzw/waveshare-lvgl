@@ -47,24 +47,20 @@ bool framed_uart_send(FramedUart *framed_uart, const uint8_t *payload, size_t le
 
 bool framed_uart_try_receive(
     FramedUart *framed_uart,
-    uint8_t *payload,
-    size_t capacity,
-    size_t *length
+    uint8_t    *payload,
+    size_t      capacity,
+    size_t     *length
 ) {
-    if (length != NULL) {
-        *length = 0;
-    }
+    if (length != NULL) { *length = 0; }
 
-    if (
-        framed_uart == NULL ||
+    if (framed_uart == NULL       ||
         !framed_uart->initialized ||
-        payload == NULL ||
-        capacity == 0 ||
+        payload == NULL           ||
+        capacity == 0             ||
         length == NULL
     ) { return false; }
 
     uint8_t byte;
-
     while (pio_uart_try_read(framed_uart->uart, &byte)) {
         if (byte != 0) {
             if (framed_uart->discarding_frame) { continue; }
@@ -97,21 +93,15 @@ bool framed_uart_try_receive(
 
         framed_uart->rx_encoded_length = 0;
 
-        if (
-            decode_result.status != COBS_DECODE_OK ||
+        if (decode_result.status != COBS_DECODE_OK ||
             decode_result.out_len < FRAMED_UART_CRC_SIZE
         ) { continue; }
 
-        size_t payload_length = decode_result.out_len - FRAMED_UART_CRC_SIZE;
-
-        uint8_t low_byte      = framed_uart->rx_decoded_buffer[payload_length];
-        uint8_t high_byte     = framed_uart->rx_decoded_buffer[payload_length + 1];
-        uint16_t received_crc = ((uint16_t)high_byte << 8) | low_byte;
-
-        uint16_t expected_crc = crc_modbus(
-            framed_uart->rx_decoded_buffer,
-            payload_length
-        );
+        size_t   payload_length = decode_result.out_len - FRAMED_UART_CRC_SIZE;
+        uint8_t  low_byte       = framed_uart->rx_decoded_buffer[payload_length];
+        uint8_t  high_byte      = framed_uart->rx_decoded_buffer[payload_length + 1];
+        uint16_t received_crc   = ((uint16_t)high_byte << 8) | low_byte;
+        uint16_t expected_crc   = crc_modbus(framed_uart->rx_decoded_buffer, payload_length);
 
         if (received_crc != expected_crc || payload_length > capacity) { continue; }
 

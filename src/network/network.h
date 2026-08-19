@@ -3,10 +3,9 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+#include "link_state_database.h"
 #include "node_identity.h"
 #include "protocol.pb.h"
-
-#define NETWORK_LINK_STATE_DATABASE_CAPACITY 64
 
 /* The NodeIdentity must remain valid while the network is running. */
 void network_init(

@@ -1,4 +1,5 @@
 #include "framed_uart.h"
+#include "link_state_database.h"
 #include "neighbor_table.h"
 #include "network.h"
 #include "node_identity.h"
@@ -20,7 +21,6 @@
 #define PIO_UART_PORT_COUNT 4
 #define HELLO_INTERVAL_MS 500
 #define NEIGHBOR_TIMEOUT_US 1500000 // 1500 ms
-#define LOCAL_LINK_STATE_INDEX 0
 #define LINK_STATE_RETRY_INTERVAL_US 250000
 
 enum {
@@ -43,13 +43,6 @@ typedef struct {
     uint32_t tx_pin;
     uint32_t rx_pin;
 } PioUartPinPair;
-
-typedef struct {
-    NetworkPacket packet;
-    uint8_t known_by_ports;
-    bool occupied;
-    bool update_pending;
-} LinkStateDatabaseEntry;
 
 typedef struct {
     bool waiting_for_ack;
@@ -83,8 +76,6 @@ static const PioUartPinPair pio_uart_pin_pairs[PIO_UART_PORT_COUNT] = {
 static PioUart pio_uarts[PIO_UART_PORT_COUNT] = {0};
 static FramedUart framed_uarts[PIO_UART_PORT_COUNT] = {0};
 static NodeIdentity *node_identity = NULL;
-static LinkStateDatabaseEntry
-    link_state_database[NETWORK_LINK_STATE_DATABASE_CAPACITY] = {0};
 static LinkStateTransmissionState
     link_state_transmissions[PIO_UART_PORT_COUNT] = {0};
 static GatewayRoute gateway_routes[NETWORK_LINK_STATE_DATABASE_CAPACITY] = {0};
@@ -249,7 +240,9 @@ void network_print_link_state_database(void) {
         entry_index < NETWORK_LINK_STATE_DATABASE_CAPACITY;
         entry_index++
     ) {
-        if (link_state_database[entry_index].occupied) {
+        NetworkPacket packet;
+
+        if (link_state_database_get_packet(entry_index, &packet)) {
             entry_count++;
         }
     }
@@ -269,11 +262,10 @@ void network_print_link_state_database(void) {
         entry_index < NETWORK_LINK_STATE_DATABASE_CAPACITY;
         entry_index++
     ) {
-        const LinkStateDatabaseEntry *entry =
-            &link_state_database[entry_index];
+        NetworkPacket packet;
 
-        if (entry->occupied) {
-            print_link_state(&entry->packet);
+        if (link_state_database_get_packet(entry_index, &packet)) {
+            print_link_state(&packet);
         }
     }
 }
@@ -355,81 +347,8 @@ static void print_ack(
     );
 }
 
-/* ==========================================================================
-   LINK_STATE database lookup and knowledge
-   ========================================================================== */
-
-static bool find_link_state_entry_index(
-    const uint8_t *source_node_id,
-    size_t *found_index
-) {
-    for (
-        size_t entry_index = 0;
-        entry_index < NETWORK_LINK_STATE_DATABASE_CAPACITY;
-        entry_index++
-    ) {
-        LinkStateDatabaseEntry *entry = &link_state_database[entry_index];
-
-        if (!entry->occupied) {
-            continue;
-        }
-
-        if (memcmp(
-            entry->packet.source_node_id,
-            source_node_id,
-            sizeof(entry->packet.source_node_id)
-        ) == 0) {
-            *found_index = entry_index;
-            return true;
-        }
-    }
-
-    return false;
-}
-
-static LinkStateDatabaseEntry *find_link_state_entry(
-    const uint8_t *source_node_id
-) {
-    size_t entry_index;
-
-    if (!find_link_state_entry_index(source_node_id, &entry_index)) {
-        return NULL;
-    }
-
-    return &link_state_database[entry_index];
-}
-
-static LinkStateDatabaseEntry *find_empty_link_state_entry(void) {
-    for (
-        size_t entry_index = LOCAL_LINK_STATE_INDEX + 1;
-        entry_index < NETWORK_LINK_STATE_DATABASE_CAPACITY;
-        entry_index++
-    ) {
-        LinkStateDatabaseEntry *entry = &link_state_database[entry_index];
-
-        if (!entry->occupied) {
-            return entry;
-        }
-    }
-
-    return NULL;
-}
-
 static void clear_link_state_knowledge(uint32_t local_port) {
-    uint8_t port_mask = (uint8_t)(1u << local_port);
-    uint8_t other_ports_mask = (uint8_t)~port_mask;
-
-    for (
-        size_t entry_index = 0;
-        entry_index < NETWORK_LINK_STATE_DATABASE_CAPACITY;
-        entry_index++
-    ) {
-        LinkStateDatabaseEntry *entry = &link_state_database[entry_index];
-
-        if (entry->occupied) {
-            entry->known_by_ports &= other_ports_mask;
-        }
-    }
+    link_state_database_clear_port_knowledge(local_port);
 
     printf(
         "LINK_STATE knowledge cleared for port %lu\n\n",
@@ -487,38 +406,47 @@ static void calculate_gateway_routes(void) {
     memset(gateway_routes, 0, sizeof(gateway_routes));
     gateway_route_count = 0;
 
-    const LinkStateDatabaseEntry *local_entry = &link_state_database[LOCAL_LINK_STATE_INDEX];
-    if (!local_entry->occupied) {
+    NetworkPacket local_packet;
+    if (!link_state_database_get_packet(
+        LINK_STATE_DATABASE_LOCAL_INDEX,
+        &local_packet
+    )) {
         return;
     }
 
     size_t next_queue_index = 0;
     size_t queue_length = 1;
     queue[0] = (GatewayRouteTraversal){
-        .database_index = LOCAL_LINK_STATE_INDEX,
+        .database_index = LINK_STATE_DATABASE_LOCAL_INDEX,
         .first_local_port = 0,
         .hop_count = 0
     };
-    visited[LOCAL_LINK_STATE_INDEX] = true;
+    visited[LINK_STATE_DATABASE_LOCAL_INDEX] = true;
 
     while (next_queue_index < queue_length) {
         GatewayRouteTraversal current = queue[next_queue_index];
         next_queue_index++;
 
-        const LinkStateDatabaseEntry *current_entry = &link_state_database[current.database_index];
-        const NetworkPacket *current_packet         = &current_entry->packet;
-        const LinkState *current_link_state         = &current_packet->payload.link_state;
+        NetworkPacket current_packet;
+        bool current_entry_exists = link_state_database_get_packet(
+            current.database_index,
+            &current_packet
+        );
+        hard_assert(current_entry_exists);
+
+        const LinkState *current_link_state = &current_packet.payload.link_state;
 
         if (current_link_state->gateway_connected) {
             GatewayRoute *route = &gateway_routes[gateway_route_count];
             memcpy(
                 route->node_id,
-                current_packet->source_node_id,
+                current_packet.source_node_id,
                 sizeof(route->node_id)
             );
             route->local_port = current.first_local_port;
             route->hop_count  = current.hop_count;
-            route->is_local   = current.database_index == LOCAL_LINK_STATE_INDEX;
+            route->is_local   =
+                current.database_index == LINK_STATE_DATABASE_LOCAL_INDEX;
             gateway_route_count++;
         }
 
@@ -530,7 +458,7 @@ static void calculate_gateway_routes(void) {
             const LinkStateNeighbor *neighbor = &current_link_state->neighbors[neighbor_index];
             size_t neighbor_database_index;
 
-            if (!find_link_state_entry_index(
+            if (!link_state_database_find_index(
                 neighbor->node_id,
                 &neighbor_database_index
             )) {
@@ -541,17 +469,25 @@ static void calculate_gateway_routes(void) {
                 continue;
             }
 
-            const LinkStateDatabaseEntry *neighbor_entry = &link_state_database[neighbor_database_index];
+            NetworkPacket neighbor_packet;
+            bool neighbor_entry_exists = link_state_database_get_packet(
+                neighbor_database_index,
+                &neighbor_packet
+            );
+            hard_assert(neighbor_entry_exists);
+
             if (!link_has_reciprocal_observation(
-                current_packet,
+                &current_packet,
                 neighbor,
-                &neighbor_entry->packet
+                &neighbor_packet
             )) {
                 continue;
             }
 
             uint32_t first_local_port = current.first_local_port;
-            if (current.database_index == LOCAL_LINK_STATE_INDEX) {
+            if (
+                current.database_index == LINK_STATE_DATABASE_LOCAL_INDEX
+            ) {
                 first_local_port = neighbor->local_port;
             }
 
@@ -588,25 +524,6 @@ static void request_link_state_scans_for_observed_neighbors(void) {
     }
 }
 
-static bool link_state_versions_match(
-    const NetworkPacket *first,
-    const NetworkPacket *second
-) {
-    return first->boot_id == second->boot_id &&
-           first->sequence == second->sequence;
-}
-
-static bool link_state_version_is_newer(
-    const NetworkPacket *received,
-    const NetworkPacket *stored
-) {
-    if (received->boot_id != stored->boot_id) {
-        return received->boot_id > stored->boot_id;
-    }
-
-    return received->sequence > stored->sequence;
-}
-
 static void handle_received_ack(
     const NetworkPacket *packet,
     uint32_t local_port,
@@ -623,21 +540,28 @@ static void handle_received_ack(
         sender_node_id_matches &&
         packet->boot_id == neighbor->boot_id;
 
-    LinkStateDatabaseEntry *entry = find_link_state_entry(
-        ack->acknowledged_node_id
-    );
+    size_t entry_index;
+    NetworkPacket acknowledged_packet;
+    bool entry_exists =
+        link_state_database_find_index(
+            ack->acknowledged_node_id,
+            &entry_index
+        ) &&
+        link_state_database_get_packet(
+            entry_index,
+            &acknowledged_packet
+        );
     bool acknowledged_version_matches =
-        entry != NULL &&
-        entry->packet.boot_id == ack->acknowledged_boot_id &&
-        entry->packet.sequence == ack->acknowledged_sequence;
+        entry_exists &&
+        acknowledged_packet.boot_id == ack->acknowledged_boot_id &&
+        acknowledged_packet.sequence == ack->acknowledged_sequence;
 
     if (!sender_matches_neighbor || !acknowledged_version_matches) {
         print_ack("ACK ignored", packet, local_port);
         return;
     }
 
-    uint8_t ingress_port_mask = (uint8_t)(1u << local_port);
-    entry->known_by_ports |= ingress_port_mask;
+    link_state_database_mark_known_by_port(entry_index, local_port);
 
     LinkStateTransmissionState *transmission =
         &link_state_transmissions[local_port];
@@ -663,97 +587,71 @@ static bool store_received_link_state(
     const NetworkPacket *packet,
     uint32_t local_port
 ) {
-    uint8_t ingress_port_mask = (uint8_t)(1u << local_port);
-    LinkStateDatabaseEntry *entry = find_link_state_entry(
-        packet->source_node_id
+    LinkStateStoreResult result = link_state_database_store_received(
+        packet,
+        node_identity->node_id.id,
+        local_port
     );
 
-    bool source_is_local = memcmp(
-        packet->source_node_id,
-        node_identity->node_id.id,
-        sizeof(packet->source_node_id)
-    ) == 0;
+    switch (result) {
+        case LINK_STATE_STORE_NEW:
+            calculate_gateway_routes();
+            printf(
+                "Remote LINK_STATE stored on port %lu\n",
+                (unsigned long)local_port
+            );
+            print_link_state(packet);
+            break;
 
-    if (source_is_local) {
-        if (
-            entry != NULL &&
-            link_state_versions_match(packet, &entry->packet)
-        ) {
-            entry->known_by_ports |= ingress_port_mask;
+        case LINK_STATE_STORE_UPDATED:
+            calculate_gateway_routes();
+            printf(
+                "Remote LINK_STATE updated on port %lu\n",
+                (unsigned long)local_port
+            );
+            print_link_state(packet);
+            break;
+
+        case LINK_STATE_STORE_DUPLICATE:
+            printf(
+                "Duplicate LINK_STATE received on port %lu\n\n",
+                (unsigned long)local_port
+            );
+            break;
+
+        case LINK_STATE_STORE_STALE:
+            printf(
+                "Stale LINK_STATE ignored on port %lu\n\n",
+                (unsigned long)local_port
+            );
+            break;
+
+        case LINK_STATE_STORE_LOCAL_DUPLICATE:
             printf(
                 "Duplicate local LINK_STATE received on port %lu\n\n",
                 (unsigned long)local_port
             );
-        } else {
+            break;
+
+        case LINK_STATE_STORE_LOCAL_CONFLICT:
             printf(
                 "Conflicting local LINK_STATE ignored on port %lu\n\n",
                 (unsigned long)local_port
             );
-        }
+            break;
 
-        return true;
-    }
-
-    if (entry == NULL) {
-        entry = find_empty_link_state_entry();
-
-        if (entry == NULL) {
+        case LINK_STATE_STORE_FULL:
             printf(
                 "LINK_STATE database full; packet ignored on port %lu\n\n",
                 (unsigned long)local_port
             );
             return false;
-        }
-
-        entry->packet = *packet;
-        entry->occupied = true;
-        entry->known_by_ports = ingress_port_mask;
-        entry->update_pending = true;
-        calculate_gateway_routes();
-
-        printf(
-            "Remote LINK_STATE stored on port %lu\n",
-            (unsigned long)local_port
-        );
-        print_link_state(&entry->packet);
-        return true;
     }
-
-    if (link_state_versions_match(packet, &entry->packet)) {
-        entry->known_by_ports |= ingress_port_mask;
-        printf(
-            "Duplicate LINK_STATE received on port %lu\n\n",
-            (unsigned long)local_port
-        );
-        return true;
-    }
-
-    if (!link_state_version_is_newer(packet, &entry->packet)) {
-        printf(
-            "Stale LINK_STATE ignored on port %lu\n\n",
-            (unsigned long)local_port
-        );
-        return true;
-    }
-
-    entry->packet = *packet;
-    entry->known_by_ports = ingress_port_mask;
-    entry->update_pending = true;
-    calculate_gateway_routes();
-
-    printf(
-        "Remote LINK_STATE updated on port %lu\n",
-        (unsigned long)local_port
-    );
-    print_link_state(&entry->packet);
 
     return true;
 }
 
-static void update_local_link_state(
-    LinkStateDatabaseEntry *entry,
-    NodeIdentity *identity
-) {
+static void update_local_link_state(NodeIdentity *identity) {
     NetworkPacket packet = NetworkPacket_init_zero;
     memcpy(
         packet.source_node_id,
@@ -788,24 +686,21 @@ static void update_local_link_state(
         link_state->neighbors_count++;
     }
 
-    entry->packet = packet;
-    entry->occupied = true;
-    entry->known_by_ports = 0;
-    entry->update_pending = true;
+    link_state_database_store_local(&packet);
     calculate_gateway_routes();
 
     printf("Local LINK_STATE updated\n");
-    print_link_state(&entry->packet);
+    print_link_state(&packet);
 }
 
 static void send_link_state(
     const char *event,
-    const LinkStateDatabaseEntry *entry,
+    const NetworkPacket *packet,
     FramedUart *framed_uart,
     uint32_t local_port
 ) {
-    hard_assert(entry->occupied);
-    hard_assert(entry->packet.which_payload == NetworkPacket_link_state_tag);
+    hard_assert(packet != NULL);
+    hard_assert(packet->which_payload == NetworkPacket_link_state_tag);
 
     uint8_t encoded_packet[NetworkPacket_size];
     pb_ostream_t stream = pb_ostream_from_buffer(
@@ -816,7 +711,7 @@ static void send_link_state(
     bool encoded = pb_encode(
         &stream,
         &NetworkPacket_msg,
-        &entry->packet
+        packet
     );
     hard_assert(encoded);
     hard_assert(framed_uart_send(
@@ -830,7 +725,7 @@ static void send_link_state(
         event,
         (unsigned long)local_port
     );
-    print_link_state(&entry->packet);
+    print_link_state(packet);
 }
 
 static void service_link_state_transmission(uint32_t local_port) {
@@ -843,19 +738,25 @@ static void service_link_state_transmission(uint32_t local_port) {
         return;
     }
 
-    uint8_t port_mask = (uint8_t)(1u << local_port);
-
     if (transmission->waiting_for_ack) {
-        LinkStateDatabaseEntry *entry = find_link_state_entry(
-            transmission->pending_node_id
-        );
+        size_t entry_index;
+        NetworkPacket pending_packet;
+        bool entry_exists =
+            link_state_database_find_index(
+                transmission->pending_node_id,
+                &entry_index
+            ) &&
+            link_state_database_get_packet(
+                entry_index,
+                &pending_packet
+            );
         bool pending_version_is_current =
-            entry != NULL &&
-            entry->packet.boot_id == transmission->pending_boot_id &&
-            entry->packet.sequence == transmission->pending_sequence;
+            entry_exists &&
+            pending_packet.boot_id == transmission->pending_boot_id &&
+            pending_packet.sequence == transmission->pending_sequence;
         bool pending_version_is_known =
-            entry != NULL &&
-            (entry->known_by_ports & port_mask) != 0;
+            entry_exists &&
+            link_state_database_is_known_by_port(entry_index, local_port);
 
         if (!pending_version_is_current || pending_version_is_known) {
             transmission->waiting_for_ack = false;
@@ -866,7 +767,7 @@ static void service_link_state_transmission(uint32_t local_port) {
             if (current_time_us >= transmission->next_retry_time_us) {
                 send_link_state(
                     "Retrying",
-                    entry,
+                    &pending_packet,
                     &framed_uarts[local_port],
                     local_port
                 );
@@ -889,20 +790,19 @@ static void service_link_state_transmission(uint32_t local_port) {
         entry_index < NETWORK_LINK_STATE_DATABASE_CAPACITY;
         entry_index++
     ) {
-        LinkStateDatabaseEntry *entry = &link_state_database[entry_index];
+        NetworkPacket packet;
 
-        if (!entry->occupied) {
+        if (!link_state_database_get_packet(entry_index, &packet)) {
             continue;
         }
 
-        bool entry_is_known = (entry->known_by_ports & port_mask) != 0;
-        if (entry_is_known) {
+        if (link_state_database_is_known_by_port(entry_index, local_port)) {
             continue;
         }
 
         send_link_state(
             "Sending",
-            entry,
+            &packet,
             &framed_uarts[local_port],
             local_port
         );
@@ -910,11 +810,11 @@ static void service_link_state_transmission(uint32_t local_port) {
         transmission->waiting_for_ack = true;
         memcpy(
             transmission->pending_node_id,
-            entry->packet.source_node_id,
+            packet.source_node_id,
             sizeof(transmission->pending_node_id)
         );
-        transmission->pending_boot_id = entry->packet.boot_id;
-        transmission->pending_sequence = entry->packet.sequence;
+        transmission->pending_boot_id = packet.boot_id;
+        transmission->pending_sequence = packet.sequence;
         transmission->next_retry_time_us =
             time_us_64() + LINK_STATE_RETRY_INTERVAL_US;
         return;
@@ -1046,58 +946,15 @@ bool network_get_link_state_database_packet(
     size_t entry_index,
     NetworkPacket *packet
 ) {
-    if (packet == NULL) {
-        return false;
-    }
-
-    if (entry_index >= NETWORK_LINK_STATE_DATABASE_CAPACITY) {
-        return false;
-    }
-
-    const LinkStateDatabaseEntry *entry =
-        &link_state_database[entry_index];
-
-    if (!entry->occupied) {
-        return false;
-    }
-
-    *packet = entry->packet;
-    return true;
+    return link_state_database_get_packet(entry_index, packet);
 }
 
 bool network_take_link_state_database_update(size_t *entry_index) {
-    if (entry_index == NULL) {
-        return false;
-    }
-
-    for (
-        size_t current_index = 0;
-        current_index < NETWORK_LINK_STATE_DATABASE_CAPACITY;
-        current_index++
-    ) {
-        LinkStateDatabaseEntry *entry =
-            &link_state_database[current_index];
-
-        if (!entry->update_pending) {
-            continue;
-        }
-
-        entry->update_pending = false;
-        *entry_index = current_index;
-        return true;
-    }
-
-    return false;
+    return link_state_database_take_update(entry_index);
 }
 
 void network_clear_link_state_database_updates(void) {
-    for (
-        size_t entry_index = 0;
-        entry_index < NETWORK_LINK_STATE_DATABASE_CAPACITY;
-        entry_index++
-    ) {
-        link_state_database[entry_index].update_pending = false;
-    }
+    link_state_database_clear_updates();
 }
 
 void network_set_gateway_connected(bool connected) {
@@ -1108,10 +965,7 @@ void network_set_gateway_connected(bool connected) {
     }
 
     local_gateway_connected = connected;
-    update_local_link_state(
-        &link_state_database[LOCAL_LINK_STATE_INDEX],
-        node_identity
-    );
+    update_local_link_state(node_identity);
     request_link_state_scans_for_observed_neighbors();
 }
 
@@ -1123,6 +977,7 @@ void network_init(
     node_identity = identity;
     timing_output_enabled = enable_timing_output;
     neighbor_table_init();
+    link_state_database_init();
 
     for (uint32_t local_port = 0; local_port < PIO_UART_PORT_COUNT; local_port++) {
         uint32_t tx_pin = pio_uart_pin_pairs[local_port].tx_pin;
@@ -1144,10 +999,7 @@ void network_init(
         );
     }
 
-    update_local_link_state(
-        &link_state_database[LOCAL_LINK_STATE_INDEX],
-        node_identity
-    );
+    update_local_link_state(node_identity);
 }
 
 void network_update(void) {
@@ -1212,10 +1064,7 @@ void network_update(void) {
     }
 
     if (adjacency_changed) {
-        update_local_link_state(
-            &link_state_database[LOCAL_LINK_STATE_INDEX],
-            node_identity
-        );
+        update_local_link_state(node_identity);
         request_link_state_scans_for_observed_neighbors();
     }
 

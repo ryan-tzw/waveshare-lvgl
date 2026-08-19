@@ -76,7 +76,7 @@ bool link_state_sync_process_ack(uint32_t local_port, const Ack *ack) {
    Transmission scheduling
    ========================================================================== */
 
-LinkStateSyncAction link_state_sync_update(
+LinkStateSyncAction link_state_sync_prepare_packet_for_port_if_needed(
     uint32_t local_port,
     bool neighbor_observed,
     uint64_t current_time_us,

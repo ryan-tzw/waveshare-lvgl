@@ -38,7 +38,6 @@ typedef struct {
 bool pio_uart_init(PioUart *uart, uint tx_pin, uint rx_pin, uint baud_rate);
 
 /* TX uses the PIO FIFO's blocking write operation. */
-void pio_uart_write_byte(PioUart *uart, uint8_t byte);
 void pio_uart_write(PioUart *uart, const uint8_t *data, size_t length);
 
 /* RX reads only from the interrupt-fed software queue and never blocks. */

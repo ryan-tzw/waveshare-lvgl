@@ -164,10 +164,3 @@ void network_diagnostics_print_ack(
         (unsigned long)ack->acknowledged_sequence
     );
 }
-
-void network_diagnostics_print_knowledge_cleared(uint32_t local_port) {
-    printf(
-        "LINK_STATE knowledge cleared for port %lu\n\n",
-        (unsigned long)local_port
-    );
-}

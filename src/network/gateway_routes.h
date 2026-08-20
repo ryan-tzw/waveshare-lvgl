@@ -17,3 +17,9 @@ size_t gateway_routes_get_count(void);
 
 /* Copies one calculated route; invalid indices and null outputs return false. */
 bool gateway_routes_get(size_t route_index, GatewayRoute *route);
+
+/* Finds the calculated route to one gateway; null arguments and missing routes return false. */
+bool gateway_routes_find_by_node_id(
+    const uint8_t gateway_node_id[PICO_UNIQUE_BOARD_ID_SIZE_BYTES],
+    GatewayRoute *route
+);

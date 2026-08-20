@@ -70,6 +70,14 @@ static bool timing_output_enabled = false;
    Basic packet transmission
    ========================================================================== */
 
+static void encode_and_send_network_packet(FramedUart *destination_uart, const NetworkPacket *packet) {
+    uint8_t encoded_packet[NetworkPacket_size];
+    pb_ostream_t stream = pb_ostream_from_buffer(encoded_packet, sizeof(encoded_packet));
+
+    hard_assert( pb_encode(&stream, &NetworkPacket_msg, packet) );
+    hard_assert( framed_uart_send(destination_uart, encoded_packet, stream.bytes_written) );
+}
+
 static void send_hello(FramedUart *framed_uart, NodeIdentity *identity, uint32_t sender_port) {
     uint64_t start_time_us = time_us_64();
 
@@ -79,11 +87,7 @@ static void send_hello(FramedUart *framed_uart, NodeIdentity *identity, uint32_t
     packet.which_payload             = NetworkPacket_hello_tag;
     packet.payload.hello.sender_port = sender_port;
 
-    uint8_t encoded_packet[NetworkPacket_size];
-    pb_ostream_t stream = pb_ostream_from_buffer(encoded_packet, sizeof(encoded_packet));
-
-    hard_assert( pb_encode(&stream, &NetworkPacket_msg, &packet) );
-    hard_assert( framed_uart_send(framed_uart, encoded_packet, stream.bytes_written) );
+    encode_and_send_network_packet(framed_uart, &packet);
 
     uint64_t elapsed_time_us = time_us_64() - start_time_us;
     if (timing_output_enabled) {
@@ -108,11 +112,7 @@ static void send_ack(FramedUart *framed_uart, const NodeIdentity *identity, cons
     ack->acknowledged_boot_id  = acknowledged_packet->boot_id;
     ack->acknowledged_sequence = acknowledged_packet->sequence;
 
-    uint8_t encoded_packet[NetworkPacket_size];
-    pb_ostream_t stream = pb_ostream_from_buffer(encoded_packet, sizeof(encoded_packet));
-
-    hard_assert( pb_encode(&stream, &NetworkPacket_msg, &packet) );
-    hard_assert( framed_uart_send(framed_uart, encoded_packet, stream.bytes_written) );
+    encode_and_send_network_packet(framed_uart, &packet);
 }
 
 static void send_device_state_to_gateway(const GatewayRoute *route, DeviceType device_type) {
@@ -139,11 +139,7 @@ static void send_device_state_to_gateway(const GatewayRoute *route, DeviceType d
         case DEVICE_TYPE_SWITCH:  { device_state->which_state = DeviceState_switch_tag;  } break;
     }
 
-    uint8_t encoded_packet[NetworkPacket_size];
-    pb_ostream_t stream = pb_ostream_from_buffer(encoded_packet, sizeof(encoded_packet));
-
-    hard_assert( pb_encode(&stream, &NetworkPacket_msg, &packet) );
-    hard_assert( framed_uart_send(&framed_uarts[route->local_port], encoded_packet, stream.bytes_written) );
+    encode_and_send_network_packet(&framed_uarts[route->local_port], &packet);
 }
 
 static void send_device_state_to_remote_gateways(void) {
@@ -157,6 +153,19 @@ static void send_device_state_to_remote_gateways(void) {
         if (route.is_local) { continue; }
         send_device_state_to_gateway(&route, device_type);
     }
+}
+
+static void forward_routed_message(NetworkPacket *packet, const GatewayRoute *route) {
+    hard_assert(packet != NULL);
+    hard_assert(route != NULL);
+    hard_assert(!route->is_local);
+    hard_assert(route->local_port < PIO_UART_PORT_COUNT);
+    hard_assert(packet->which_payload == NetworkPacket_routed_message_tag);
+    hard_assert(packet->payload.routed_message.remaining_hops > 1);
+
+    packet->payload.routed_message.remaining_hops--;
+
+    encode_and_send_network_packet(&framed_uarts[route->local_port], packet);
 }
 
 static void clear_link_state_knowledge_for_port(uint32_t local_port) {
@@ -298,11 +307,7 @@ static void send_link_state_for_port_if_needed(uint32_t local_port) {
 
     hard_assert( packet.which_payload == NetworkPacket_link_state_tag );
 
-    uint8_t encoded_packet[NetworkPacket_size];
-    pb_ostream_t stream = pb_ostream_from_buffer(encoded_packet, sizeof(encoded_packet));
-
-    hard_assert( pb_encode(&stream, &NetworkPacket_msg, &packet) );
-    hard_assert( framed_uart_send(&framed_uarts[local_port], encoded_packet, stream.bytes_written) );
+    encode_and_send_network_packet(&framed_uarts[local_port], &packet);
 
     printf(
         "%s LINK_STATE on port %lu\n",
@@ -325,24 +330,49 @@ static const char *neighbor_change_name(NeighborChanges neighbor_changes) {
     return NULL;
 }
 
-static void handle_received_routed_message(const NetworkPacket *packet, uint32_t local_port) {
-    const RoutedMessage *routed_message = &packet->payload.routed_message;
+static void handle_received_routed_message(NetworkPacket *packet, uint32_t local_port) {
+    RoutedMessage *routed_message = &packet->payload.routed_message;
+    network_diagnostics_print_routed_device_state(packet, local_port);
+
+    if (!routed_message->has_device_state) {
+        printf("Result: dropped because device state is missing\n\n");
+        return;
+    }
+
     bool destination_is_local = memcmp(
         routed_message->destination_gateway_node_id,
         node_identity->node_id.id,
         sizeof(routed_message->destination_gateway_node_id)
     ) == 0;
 
-    const char *delivery_result;
-    if (!destination_is_local) {
-        delivery_result = "addressed to another gateway; forwarding is not implemented yet";
-    } else if (!local_gateway_connected) {
-        delivery_result = "local WebUSB gateway is no longer connected";
-    } else {
-        delivery_result = "reached the intended local gateway";
+    if (destination_is_local) {
+        printf(
+            "Result: %s\n\n",
+            local_gateway_connected
+                ? "reached the intended local gateway"
+                : "dropped because the local WebUSB gateway is no longer connected"
+        );
+        return;
     }
 
-    network_diagnostics_print_routed_device_state(packet, local_port, delivery_result);
+    if (routed_message->remaining_hops <= 1) {
+        printf("Result: dropped because the remaining hop allowance is exhausted\n\n");
+        return;
+    }
+
+    GatewayRoute route;
+    if (!gateway_routes_find_by_node_id(routed_message->destination_gateway_node_id, &route)) {
+        printf("Result: dropped because no route to the destination gateway exists\n\n");
+        return;
+    }
+
+    hard_assert(!route.is_local);
+    forward_routed_message(packet, &route);
+    printf(
+        "Result: forwarded through port %lu with %lu hops remaining\n\n",
+        (unsigned long)route.local_port,
+        (unsigned long)routed_message->remaining_hops
+    );
 }
 
 static bool handle_received_packet(const uint8_t *data, size_t length, uint32_t local_port) {

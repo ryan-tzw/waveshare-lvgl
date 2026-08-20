@@ -156,8 +156,7 @@ void network_diagnostics_print_ack(
 
 void network_diagnostics_print_routed_device_state(
     const NetworkPacket *packet,
-    uint32_t             local_port,
-    const char          *delivery_result
+    uint32_t             local_port
 ) {
     const RoutedMessage *routed_message = &packet->payload.routed_message;
 
@@ -192,5 +191,4 @@ void network_diagnostics_print_routed_device_state(
     }
 
     printf("Device type: %s\n", device_type);
-    printf("Result: %s\n\n", delivery_result);
 }

@@ -138,3 +138,19 @@ bool gateway_routes_get(size_t route_index, GatewayRoute *route) {
     *route = gateway_routes[route_index];
     return true;
 }
+
+bool gateway_routes_find_by_node_id(
+    const uint8_t gateway_node_id[PICO_UNIQUE_BOARD_ID_SIZE_BYTES],
+    GatewayRoute *route
+) {
+    if (gateway_node_id == NULL || route == NULL) { return false; }
+
+    for (size_t i = 0; i < gateway_route_count; i++) {
+        if (memcmp(gateway_routes[i].node_id, gateway_node_id, sizeof(gateway_routes[i].node_id)) != 0) { continue; }
+
+        *route = gateway_routes[i];
+        return true;
+    }
+
+    return false;
+}

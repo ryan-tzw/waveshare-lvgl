@@ -2,6 +2,7 @@
 #include "gateway_routes.h"
 #include "link_state_database.h"
 #include "pico/assert.h"
+#include "pico/unique_id.h"
 #include <stdio.h>
 
 
@@ -9,16 +10,19 @@
    Diagnostic output
    ========================================================================== */
 
+static void print_node_id(const uint8_t node_id[PICO_UNIQUE_BOARD_ID_SIZE_BYTES]) {
+    for (size_t i = 0; i < PICO_UNIQUE_BOARD_ID_SIZE_BYTES; i++) {
+        printf("%02x", (unsigned int)node_id[i]);
+    }
+}
+
 void network_diagnostics_print_neighbor(
     const char     *event,
     const Neighbor *neighbor,
     uint32_t        local_port
 ) {
     printf("%s on port %lu: ", event, (unsigned long)local_port);
-    for (size_t i = 0; i < sizeof(neighbor->node_id); i++) {
-        unsigned int node_id_byte = neighbor->node_id[i];
-        printf("%02x", node_id_byte); // format int to 2-digit zero-padded hex
-    }
+    print_node_id(neighbor->node_id);
 
     printf(
         " (boot %08lx, remote port %lu)\n\n", // format long to 8-digit zero-padded hex
@@ -30,10 +34,7 @@ void network_diagnostics_print_neighbor(
 void network_diagnostics_print_link_state(const NetworkPacket *packet) {
     const LinkState *link_state = &packet->payload.link_state;
 
-    for (size_t i = 0; i < sizeof(packet->source_node_id); i++) {
-        unsigned int node_id_byte = packet->source_node_id[i];
-        printf("%02x", node_id_byte);
-    }
+    print_node_id(packet->source_node_id);
 
     printf(
         " (boot %08lx, sequence %lu, gateway %s) -> [",
@@ -49,10 +50,7 @@ void network_diagnostics_print_link_state(const NetworkPacket *packet) {
             printf(", ");
         }
 
-        for (size_t j = 0; j < sizeof(neighbor->node_id); j++) {
-            unsigned int node_id_byte = neighbor->node_id[j];
-            printf("%02x", node_id_byte);
-        }
+        print_node_id(neighbor->node_id);
 
         printf(
             " (%lu->%lu)",
@@ -112,10 +110,7 @@ void network_diagnostics_print_gateway_routes(void) {
         GatewayRoute route;
         hard_assert( gateway_routes_get(route_index, &route) );
 
-        for (size_t i = 0; i < sizeof(route.node_id); i++) {
-            unsigned int node_id_byte = route.node_id[i];
-            printf("%02x", node_id_byte);
-        }
+        print_node_id(route.node_id);
 
         if (route.is_local) {
             printf(" -> local, 0 hops\n");
@@ -141,10 +136,7 @@ void network_diagnostics_print_ack(
 
     // outer packet identifies the neighbor that sent the ACK
     printf("%s on port %lu from ", event, (unsigned long)local_port);
-    for (size_t i = 0; i < sizeof(packet->source_node_id); i++) {
-        unsigned int node_id_byte = packet->source_node_id[i];
-        printf("%02x", node_id_byte);
-    }
+    print_node_id(packet->source_node_id);
 
     printf(
         " (boot %08lx)\n",
@@ -153,14 +145,52 @@ void network_diagnostics_print_ack(
 
     // ACK payload identifies the LINK_STATE packet it acknowledges
     printf("Acknowledged: ");
-    for (size_t i = 0; i < sizeof(ack->acknowledged_node_id); i++) {
-        unsigned int node_id_byte = ack->acknowledged_node_id[i];
-        printf("%02x", node_id_byte);
-    }
+    print_node_id(ack->acknowledged_node_id);
 
     printf(
         " (boot %08lx, sequence %lu)\n\n",
         (unsigned long)ack->acknowledged_boot_id,
         (unsigned long)ack->acknowledged_sequence
     );
+}
+
+void network_diagnostics_print_routed_device_state(
+    const NetworkPacket *packet,
+    uint32_t             local_port,
+    const char          *delivery_result
+) {
+    const RoutedMessage *routed_message = &packet->payload.routed_message;
+
+    printf("Routed DEVICE_STATE received on port %lu\n", (unsigned long)local_port);
+
+    printf("Source: ");
+    print_node_id(packet->source_node_id);
+    printf(
+        " (boot %08lx, sequence %lu)\n",
+        (unsigned long)packet->boot_id,
+        (unsigned long)packet->sequence
+    );
+
+    printf("Destination gateway: ");
+    print_node_id(routed_message->destination_gateway_node_id);
+
+    printf(
+        "\nRemaining hops: %lu\n",
+        (unsigned long)routed_message->remaining_hops
+    );
+
+    const char *device_type;
+    if (!routed_message->has_device_state) { device_type = "missing"; }
+    else {
+        switch (routed_message->device_state.which_state) {
+            case 0:                        { device_type = "unselected";  } break;
+            case DeviceState_bulb_tag:     { device_type = "bulb";        } break;
+            case DeviceState_battery_tag:  { device_type = "battery";     } break;
+            case DeviceState_switch_tag:   { device_type = "switch";      } break;
+            default:                       { device_type = "unsupported"; } break;
+        }
+    }
+
+    printf("Device type: %s\n", device_type);
+    printf("Result: %s\n\n", delivery_result);
 }

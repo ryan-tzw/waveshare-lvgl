@@ -1,3 +1,4 @@
+#include "device_state.h"
 #include "framed_uart.h"
 #include "gateway_routes.h"
 #include "link_state_database.h"
@@ -20,10 +21,11 @@
    Network configuration and state
    ========================================================================== */
 
-#define PIO_UART_BAUD       115200
-#define PIO_UART_PORT_COUNT 4
-#define HELLO_INTERVAL_MS   500
-#define NEIGHBOR_TIMEOUT_US 1500000 // 1500 ms
+#define PIO_UART_BAUD                   115200
+#define PIO_UART_PORT_COUNT             4
+#define HELLO_INTERVAL_MS               500
+#define DEVICE_STATE_SEND_INTERVAL_MS   1000
+#define NEIGHBOR_TIMEOUT_US             1500000 // 1500 ms
 
 enum {
     NEIGHBOR_ADJACENCY_CHANGE_MASK =
@@ -58,6 +60,7 @@ static FramedUart       framed_uarts[PIO_UART_PORT_COUNT] = {0};
 static NodeIdentity     *node_identity                    = NULL;
 static bool             local_gateway_connected           = false;
 static absolute_time_t  next_hello_time;
+static absolute_time_t  next_device_state_send_time;
 static uint8_t          received_packet_bytes[FRAMED_UART_MAX_PAYLOAD_SIZE]; // reused while FramedUart ports are sequentially drained
 
 // manually toggle for timing diagnostic output
@@ -110,6 +113,50 @@ static void send_ack(FramedUart *framed_uart, const NodeIdentity *identity, cons
 
     hard_assert( pb_encode(&stream, &NetworkPacket_msg, &packet) );
     hard_assert( framed_uart_send(framed_uart, encoded_packet, stream.bytes_written) );
+}
+
+static void send_device_state_to_gateway(const GatewayRoute *route, DeviceType device_type) {
+    hard_assert(route != NULL);
+    hard_assert(!route->is_local);
+    hard_assert(route->local_port < PIO_UART_PORT_COUNT);
+
+    NetworkPacket packet = NetworkPacket_init_zero;
+    memcpy(packet.source_node_id, node_identity->node_id.id, sizeof(packet.source_node_id));
+    packet.boot_id       = node_identity->boot_id;
+    packet.sequence      = node_identity_next_sequence(node_identity);
+    packet.which_payload = NetworkPacket_routed_message_tag;
+    
+    RoutedMessage *routed_message = &packet.payload.routed_message;
+    memcpy(routed_message->destination_gateway_node_id, route->node_id, sizeof(routed_message->destination_gateway_node_id));
+    routed_message->remaining_hops   = route->hop_count;
+    routed_message->has_device_state = true;
+
+    DeviceState *device_state = &routed_message->device_state;
+    switch (device_type) {
+        case DEVICE_TYPE_NONE:    { device_state->which_state = 0;                       } break;
+        case DEVICE_TYPE_BULB:    { device_state->which_state = DeviceState_bulb_tag;    } break;
+        case DEVICE_TYPE_BATTERY: { device_state->which_state = DeviceState_battery_tag; } break;
+        case DEVICE_TYPE_SWITCH:  { device_state->which_state = DeviceState_switch_tag;  } break;
+    }
+
+    uint8_t encoded_packet[NetworkPacket_size];
+    pb_ostream_t stream = pb_ostream_from_buffer(encoded_packet, sizeof(encoded_packet));
+
+    hard_assert( pb_encode(&stream, &NetworkPacket_msg, &packet) );
+    hard_assert( framed_uart_send(&framed_uarts[route->local_port], encoded_packet, stream.bytes_written) );
+}
+
+static void send_device_state_to_remote_gateways(void) {
+    DeviceType device_type = device_state_get_type();
+    size_t route_count     = gateway_routes_get_count();
+
+    for (size_t route_index = 0; route_index < route_count; route_index++) {
+        GatewayRoute route;
+        hard_assert( gateway_routes_get(route_index, &route) );
+
+        if (route.is_local) { continue; }
+        send_device_state_to_gateway(&route, device_type);
+    }
 }
 
 static void clear_link_state_knowledge_for_port(uint32_t local_port) {
@@ -278,6 +325,26 @@ static const char *neighbor_change_name(NeighborChanges neighbor_changes) {
     return NULL;
 }
 
+static void handle_received_routed_message(const NetworkPacket *packet, uint32_t local_port) {
+    const RoutedMessage *routed_message = &packet->payload.routed_message;
+    bool destination_is_local = memcmp(
+        routed_message->destination_gateway_node_id,
+        node_identity->node_id.id,
+        sizeof(routed_message->destination_gateway_node_id)
+    ) == 0;
+
+    const char *delivery_result;
+    if (!destination_is_local) {
+        delivery_result = "addressed to another gateway; forwarding is not implemented yet";
+    } else if (!local_gateway_connected) {
+        delivery_result = "local WebUSB gateway is no longer connected";
+    } else {
+        delivery_result = "reached the intended local gateway";
+    }
+
+    network_diagnostics_print_routed_device_state(packet, local_port, delivery_result);
+}
+
 static bool handle_received_packet(const uint8_t *data, size_t length, uint32_t local_port) {
     NetworkPacket packet = NetworkPacket_init_zero;
     pb_istream_t stream  = pb_istream_from_buffer(data, length);
@@ -301,6 +368,11 @@ static bool handle_received_packet(const uint8_t *data, size_t length, uint32_t 
     if (packet.which_payload == NetworkPacket_ack_tag) {
         const Neighbor *neighbor = neighbor_table_get(local_port);
         handle_received_ack(&packet, local_port, neighbor);
+        return false;
+    }
+
+    if (packet.which_payload == NetworkPacket_routed_message_tag) {
+        handle_received_routed_message(&packet, local_port);
         return false;
     }
 
@@ -401,7 +473,8 @@ void network_init(NodeIdentity *identity, bool enable_timing_output) {
     }
 
     originate_local_link_state(node_identity);
-    next_hello_time = make_timeout_time_ms(HELLO_INTERVAL_MS);
+    next_hello_time             = make_timeout_time_ms(HELLO_INTERVAL_MS);
+    next_device_state_send_time = make_timeout_time_ms(DEVICE_STATE_SEND_INTERVAL_MS);
 }
 
 void network_update(void) {
@@ -443,6 +516,11 @@ void network_update(void) {
     if (adjacency_changed) {
         originate_local_link_state(node_identity);
         request_link_state_scans_for_observed_neighbors();
+    }
+
+    if (time_reached(next_device_state_send_time)) {
+        send_device_state_to_remote_gateways();
+        next_device_state_send_time = make_timeout_time_ms(DEVICE_STATE_SEND_INTERVAL_MS);
     }
 
     for (uint32_t local_port = 0; local_port < PIO_UART_PORT_COUNT; local_port++) {

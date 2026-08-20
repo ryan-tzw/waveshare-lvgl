@@ -65,6 +65,7 @@ static uint8_t          received_packet_bytes[FRAMED_UART_MAX_PAYLOAD_SIZE]; // 
 
 // manually toggle for timing diagnostic output
 static bool timing_output_enabled = false;
+static const bool routed_device_state_trace_enabled = false;
 
 /* ==========================================================================
    Basic packet transmission
@@ -332,10 +333,13 @@ static const char *neighbor_change_name(NeighborChanges neighbor_changes) {
 
 static void handle_received_routed_message(NetworkPacket *packet, uint32_t local_port) {
     RoutedMessage *routed_message = &packet->payload.routed_message;
-    network_diagnostics_print_routed_device_state(packet, local_port);
+
+    if (routed_device_state_trace_enabled) {
+        network_diagnostics_print_routed_device_state(packet, local_port);
+    }
 
     if (!routed_message->has_device_state) {
-        printf("Result: dropped because device state is missing\n\n");
+        printf("Routed DEVICE_STATE dropped on port %lu: device state is missing\n\n", (unsigned long)local_port);
         return;
     }
 
@@ -346,33 +350,35 @@ static void handle_received_routed_message(NetworkPacket *packet, uint32_t local
     ) == 0;
 
     if (destination_is_local) {
-        printf(
-            "Result: %s\n\n",
-            local_gateway_connected
-                ? "reached the intended local gateway"
-                : "dropped because the local WebUSB gateway is no longer connected"
-        );
+        if (!local_gateway_connected) {
+            printf("Routed DEVICE_STATE dropped on port %lu: local WebUSB gateway is disconnected\n\n", (unsigned long)local_port);
+        } else if (routed_device_state_trace_enabled) {
+            printf("Result: reached the intended local gateway\n\n");
+        }
         return;
     }
 
     if (routed_message->remaining_hops <= 1) {
-        printf("Result: dropped because the remaining hop allowance is exhausted\n\n");
+        printf("Routed DEVICE_STATE dropped on port %lu: remaining hop allowance is exhausted\n\n", (unsigned long)local_port);
         return;
     }
 
     GatewayRoute route;
     if (!gateway_routes_find_by_node_id(routed_message->destination_gateway_node_id, &route)) {
-        printf("Result: dropped because no route to the destination gateway exists\n\n");
+        printf("Routed DEVICE_STATE dropped on port %lu: no route to the destination gateway\n\n", (unsigned long)local_port);
         return;
     }
 
     hard_assert(!route.is_local);
     forward_routed_message(packet, &route);
-    printf(
-        "Result: forwarded through port %lu with %lu hops remaining\n\n",
-        (unsigned long)route.local_port,
-        (unsigned long)routed_message->remaining_hops
-    );
+
+    if (routed_device_state_trace_enabled) {
+        printf(
+            "Result: forwarded through port %lu with %lu hops remaining\n\n",
+            (unsigned long)route.local_port,
+            (unsigned long)routed_message->remaining_hops
+        );
+    }
 }
 
 static bool handle_received_packet(const uint8_t *data, size_t length, uint32_t local_port) {

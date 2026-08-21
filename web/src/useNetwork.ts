@@ -140,7 +140,7 @@ export function useNetwork() {
     };
 
     const usb = useUsb(handlePacket);
-    const graph = deriveNetworkGraph(state.gateway, state.linkStates);
+    const graph = deriveNetworkGraph(state.gateway, state.linkStates, state.deviceStates);
 
     async function disconnectWebUsb() {
         try {

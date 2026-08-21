@@ -100,7 +100,7 @@ export function NetworkGraphView({ graph }: NetworkGraphViewProps) {
         }
 
         const horizontalPadding = 12;
-        const nodeHeight = 40;
+        const nodeHeight = 56;
 
         for (const node of graph.nodes) {
             const position = positions.get(node.nodeId);
@@ -109,7 +109,11 @@ export function NetworkGraphView({ graph }: NetworkGraphViewProps) {
                 continue;
             }
 
-            const nodeWidth = context.measureText(node.nodeId).width + horizontalPadding * 2;
+            const labelWidth = Math.max(
+                context.measureText(node.nodeId).width,
+                context.measureText(node.deviceType).width,
+            );
+            const nodeWidth = labelWidth + horizontalPadding * 2;
             const left = position.x - nodeWidth / 2;
             const top = position.y - nodeHeight / 2;
 
@@ -126,7 +130,8 @@ export function NetworkGraphView({ graph }: NetworkGraphViewProps) {
             context.strokeRect(left, top, nodeWidth, nodeHeight);
 
             context.fillStyle = textColor;
-            context.fillText(node.nodeId, position.x, position.y);
+            context.fillText(node.nodeId, position.x, position.y - 9);
+            context.fillText(node.deviceType, position.x, position.y + 10);
         }
     }, [canvasHeight, canvasWidth, graph]);
 

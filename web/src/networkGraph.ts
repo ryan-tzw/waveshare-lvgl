@@ -1,8 +1,12 @@
-import type { NetworkPacket } from "./generated/protocol_pb";
+import type { DeviceState, NetworkPacket } from "./generated/protocol_pb";
+
+type ReportedDeviceType = NonNullable<DeviceState["state"]["case"]>;
+export type NetworkDeviceType = ReportedDeviceType | "unknown" | "unselected";
 
 export type NetworkGraphNode = {
     nodeId: string;
     isGateway: boolean;
+    deviceType: NetworkDeviceType;
 };
 
 export type NetworkGraphLink = {
@@ -57,9 +61,29 @@ function createLinkKey(link: NetworkGraphLink) {
     return `${link.nodeA}:${link.portA}-${link.nodeB}:${link.portB}`;
 }
 
+function getDeviceType(
+    nodeId: string,
+    deviceStates: Map<string, NetworkPacket>,
+): NetworkDeviceType {
+    const packet = deviceStates.get(nodeId);
+
+    if (packet?.payload.case !== "routedMessage") {
+        return "unknown";
+    }
+
+    const deviceState = packet.payload.value.deviceState;
+
+    if (deviceState === undefined) {
+        return "unknown";
+    }
+
+    return deviceState.state.case ?? "unselected";
+}
+
 export function deriveNetworkGraph(
     gateway: NetworkPacket | null,
     linkStates: Map<string, NetworkPacket>,
+    deviceStates: Map<string, NetworkPacket>,
 ): NetworkGraph {
     if (gateway === null) {
         return {
@@ -69,7 +93,13 @@ export function deriveNetworkGraph(
     }
 
     const gatewayNodeId = nodeIdToHex(gateway.sourceNodeId);
-    const nodes: NetworkGraphNode[] = [{ nodeId: gatewayNodeId, isGateway: true }];
+    const nodes: NetworkGraphNode[] = [
+        {
+            nodeId: gatewayNodeId,
+            isGateway: true,
+            deviceType: getDeviceType(gatewayNodeId, deviceStates),
+        },
+    ];
     const links: NetworkGraphLink[] = [];
     const visitedNodeIds = new Set<string>([gatewayNodeId]);
     const visitedLinkKeys = new Set<string>();
@@ -105,7 +135,11 @@ export function deriveNetworkGraph(
             if (!visitedNodeIds.has(neighborNodeId)) {
                 visitedNodeIds.add(neighborNodeId);
                 nodeIdsToVisit.push(neighborNodeId);
-                nodes.push({ nodeId: neighborNodeId, isGateway: false });
+                nodes.push({
+                    nodeId: neighborNodeId,
+                    isGateway: false,
+                    deviceType: getDeviceType(neighborNodeId, deviceStates),
+                });
             }
 
             const link = createLink(

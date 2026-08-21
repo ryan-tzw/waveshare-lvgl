@@ -69,6 +69,18 @@ static void send_next_changed_link_state_if_possible(void) {
     encode_and_queue_network_packet(&packet);
 }
 
+static void send_next_routed_device_state_if_possible(void) {
+    if (!web_usb_can_send()) { return; }
+
+    NetworkPacket packet;
+    if (!network_take_local_gateway_packet(&packet)) { return; }
+
+    hard_assert(packet.which_payload == NetworkPacket_routed_message_tag);
+    hard_assert(packet.payload.routed_message.has_device_state);
+    
+    encode_and_queue_network_packet(&packet);
+}
+
 void gateway_update(const NodeIdentity *identity) {
     hard_assert(identity != NULL);
 
@@ -95,4 +107,5 @@ void gateway_update(const NodeIdentity *identity) {
     }
 
     send_next_changed_link_state_if_possible();
+    send_next_routed_device_state_if_possible();
 }

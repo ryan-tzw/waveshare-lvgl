@@ -7,11 +7,18 @@ import { useUsb } from "./useUsb";
 type NetworkState = {
     gateway: NetworkPacket | null;
     linkStates: Map<string, NetworkPacket>;
+    deviceStates: Map<string, NetworkPacket>;
 };
 
 type NetworkAction =
     | { type: "gatewayConnected"; packet: NetworkPacket }
     | { type: "linkStateReceived"; nodeId: string; packet: NetworkPacket }
+    | {
+          type: "deviceStateReceived";
+          nodeId: string;
+          destinationGatewayNodeId: string;
+          packet: NetworkPacket;
+      }
     | { type: "disconnected" };
 
 function networkReducer(state: NetworkState, action: NetworkAction): NetworkState {
@@ -20,6 +27,7 @@ function networkReducer(state: NetworkState, action: NetworkAction): NetworkStat
             return {
                 gateway: action.packet,
                 linkStates: new Map(),
+                deviceStates: new Map(),
             };
         }
         case "linkStateReceived": {
@@ -31,10 +39,27 @@ function networkReducer(state: NetworkState, action: NetworkAction): NetworkStat
                 linkStates,
             };
         }
+        case "deviceStateReceived": {
+            if (
+                state.gateway === null ||
+                nodeIdToHex(state.gateway.sourceNodeId) !== action.destinationGatewayNodeId
+            ) {
+                return state;
+            }
+
+            const deviceStates = new Map(state.deviceStates);
+            deviceStates.set(action.nodeId, action.packet);
+
+            return {
+                ...state,
+                deviceStates,
+            };
+        }
         case "disconnected": {
             return {
                 gateway: null,
                 linkStates: new Map(),
+                deviceStates: new Map(),
             };
         }
     }
@@ -44,6 +69,7 @@ export function useNetwork() {
     const [state, dispatch] = useReducer(networkReducer, {
         gateway: null,
         linkStates: new Map(),
+        deviceStates: new Map(),
     });
 
     const handlePacket = (packet: NetworkPacket) => {
@@ -82,6 +108,29 @@ export function useNetwork() {
                     `LINK_STATE received: ${nodeId} (boot ${bootId}, sequence ${packet.sequence}) -> [${adjacencyList}]`,
                 );
                 dispatch({ type: "linkStateReceived", nodeId, packet });
+                return;
+            }
+            case "routedMessage": {
+                const routedMessage = packet.payload.value;
+
+                if (routedMessage.destinationGatewayNodeId.length !== 8) {
+                    console.error(
+                        "Routed DEVICE_STATE contains an invalid destination gateway node ID",
+                    );
+                    return;
+                }
+
+                if (routedMessage.deviceState === undefined) {
+                    console.error("Routed DEVICE_STATE does not contain device state");
+                    return;
+                }
+
+                dispatch({
+                    type: "deviceStateReceived",
+                    nodeId,
+                    destinationGatewayNodeId: nodeIdToHex(routedMessage.destinationGatewayNodeId),
+                    packet,
+                });
                 return;
             }
             default: {

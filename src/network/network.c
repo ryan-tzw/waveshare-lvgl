@@ -21,11 +21,14 @@
    Network configuration and state
    ========================================================================== */
 
-#define PIO_UART_BAUD                   115200
-#define PIO_UART_PORT_COUNT             4
-#define HELLO_INTERVAL_MS               500
-#define DEVICE_STATE_SEND_INTERVAL_MS   1000
-#define NEIGHBOR_TIMEOUT_US             1500000 // 1500 ms
+#define PIO_UART_BAUD        115200
+#define PIO_UART_PORT_COUNT  4
+
+#define HELLO_INTERVAL_MS              500
+#define DEVICE_STATE_SEND_INTERVAL_MS  1000
+#define NEIGHBOR_TIMEOUT_US            1500000 // 1500 ms
+
+#define LOCAL_GATEWAY_PACKET_QUEUE_CAPACITY 8
 
 enum {
     NEIGHBOR_ADJACENCY_CHANGE_MASK =
@@ -62,6 +65,10 @@ static bool             local_gateway_connected           = false;
 static absolute_time_t  next_hello_time;
 static absolute_time_t  next_device_state_send_time;
 static uint8_t          received_packet_bytes[FRAMED_UART_MAX_PAYLOAD_SIZE]; // reused while FramedUart ports are sequentially drained
+static NetworkPacket    local_gateway_packet_queue[LOCAL_GATEWAY_PACKET_QUEUE_CAPACITY] = {0};
+static size_t           local_gateway_packet_queue_read_index  = 0;
+static size_t           local_gateway_packet_queue_write_index = 0;
+static size_t           local_gateway_packet_queue_count       = 0;
 
 // manually toggle for timing diagnostic output
 static bool timing_output_enabled = false;
@@ -116,10 +123,31 @@ static void send_ack(FramedUart *framed_uart, const NodeIdentity *identity, cons
     encode_and_send_network_packet(framed_uart, &packet);
 }
 
-static void send_device_state_to_gateway(const GatewayRoute *route, DeviceType device_type) {
+static void clear_local_gateway_packet_queue(void) {
+    local_gateway_packet_queue_read_index  = 0;
+    local_gateway_packet_queue_write_index = 0;
+    local_gateway_packet_queue_count       = 0;
+}
+
+static bool queue_packet_for_local_gateway(const NetworkPacket *packet) {
+    hard_assert(packet != NULL);
+
+    if (local_gateway_packet_queue_count == LOCAL_GATEWAY_PACKET_QUEUE_CAPACITY) {
+        printf("Local gateway packet queue full; DEVICE_STATE dropped\n\n");
+        return false;
+    }
+
+    local_gateway_packet_queue[local_gateway_packet_queue_write_index] = *packet;
+    local_gateway_packet_queue_write_index++;
+    if (local_gateway_packet_queue_write_index == LOCAL_GATEWAY_PACKET_QUEUE_CAPACITY) {
+        local_gateway_packet_queue_write_index = 0;
+    }
+    local_gateway_packet_queue_count++;
+    return true;
+}
+
+static void originate_device_state_for_gateway(const GatewayRoute *route, DeviceType device_type) {
     hard_assert(route != NULL);
-    hard_assert(!route->is_local);
-    hard_assert(route->local_port < PIO_UART_PORT_COUNT);
 
     NetworkPacket packet = NetworkPacket_init_zero;
     memcpy(packet.source_node_id, node_identity->node_id.id, sizeof(packet.source_node_id));
@@ -140,19 +168,22 @@ static void send_device_state_to_gateway(const GatewayRoute *route, DeviceType d
         case DEVICE_TYPE_SWITCH:  { device_state->which_state = DeviceState_switch_tag;  } break;
     }
 
-    encode_and_send_network_packet(&framed_uarts[route->local_port], &packet);
+    if (route->is_local) {
+        queue_packet_for_local_gateway(&packet);
+    } else {
+        hard_assert(route->local_port < PIO_UART_PORT_COUNT);
+        encode_and_send_network_packet(&framed_uarts[route->local_port], &packet);
+    }
 }
 
-static void send_device_state_to_remote_gateways(void) {
+static void originate_device_state_for_gateways(void) {
     DeviceType device_type = device_state_get_type();
     size_t route_count     = gateway_routes_get_count();
 
     for (size_t route_index = 0; route_index < route_count; route_index++) {
         GatewayRoute route;
         hard_assert( gateway_routes_get(route_index, &route) );
-
-        if (route.is_local) { continue; }
-        send_device_state_to_gateway(&route, device_type);
+        originate_device_state_for_gateway(&route, device_type);
     }
 }
 
@@ -352,8 +383,12 @@ static void handle_received_routed_message(NetworkPacket *packet, uint32_t local
     if (destination_is_local) {
         if (!local_gateway_connected) {
             printf("Routed DEVICE_STATE dropped on port %lu: local WebUSB gateway is disconnected\n\n", (unsigned long)local_port);
-        } else if (routed_device_state_trace_enabled) {
-            printf("Result: reached the intended local gateway\n\n");
+            return;
+        }
+
+        bool packet_queued = queue_packet_for_local_gateway(packet);
+        if (packet_queued && routed_device_state_trace_enabled) {
+            printf("Result: queued for the local gateway\n\n");
         }
         return;
     }
@@ -481,11 +516,25 @@ bool network_get_link_state_database_packet(size_t entry_index, NetworkPacket *p
 bool network_take_link_state_database_update(size_t *entry_index) {
     return link_state_database_take_update(entry_index); }
 
+bool network_take_local_gateway_packet(NetworkPacket *packet) {
+    if (packet == NULL || local_gateway_packet_queue_count == 0) { return false; }
+
+    *packet = local_gateway_packet_queue[local_gateway_packet_queue_read_index];
+    local_gateway_packet_queue_read_index++;
+    if (local_gateway_packet_queue_read_index == LOCAL_GATEWAY_PACKET_QUEUE_CAPACITY) {
+        local_gateway_packet_queue_read_index = 0;
+    }
+    local_gateway_packet_queue_count--;
+    return true;
+}
+
 void network_set_gateway_connected(bool connected) {
     hard_assert(node_identity != NULL);
     if (local_gateway_connected == connected) { return; }
 
     local_gateway_connected = connected;
+    if (!connected) { clear_local_gateway_packet_queue(); }
+
     originate_local_link_state(node_identity);
     request_link_state_scans_for_observed_neighbors();
 }
@@ -555,7 +604,7 @@ void network_update(void) {
     }
 
     if (time_reached(next_device_state_send_time)) {
-        send_device_state_to_remote_gateways();
+        originate_device_state_for_gateways();
         next_device_state_send_time = make_timeout_time_ms(DEVICE_STATE_SEND_INTERVAL_MS);
     }
 

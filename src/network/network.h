@@ -34,3 +34,6 @@ bool network_take_link_state_database_update(size_t *entry_index);
 
 /* Clears update notifications without changing packets or UART knowledge. */
 void network_clear_link_state_database_updates(void);
+
+/*  Retrieves a packet from the local gateway queue, if one exists */
+bool network_take_local_gateway_packet(NetworkPacket *packet);

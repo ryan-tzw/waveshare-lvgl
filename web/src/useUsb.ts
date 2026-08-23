@@ -10,6 +10,7 @@ const vendorInterfaceNumber = 2;
 const vendorEndpointNumber = 3;
 const vendorEndpointBufferSize = 64;
 const setControlLineStateRequest = 0x22;
+const heartbeatIntervalMs = 500;
 const maximumMessageLength = 240;
 const messageLengthSize = 2;
 
@@ -26,12 +27,24 @@ export function useUsb(onPacket: (packet: NetworkPacket) => void) {
     const deviceRef = useRef<USBDevice | null>(null);
     const readPromiseRef = useRef<Promise<void> | null>(null);
     const disconnectHandlerRef = useRef<((event: USBConnectionEvent) => void) | null>(null);
+    const heartbeatTimerRef = useRef<number | null>(null);
+    // Manual disconnection waits for this so its signal cannot race an active heartbeat.
+    const heartbeatPromiseRef = useRef<Promise<void> | null>(null);
     const keepReadingRef = useRef(false);
 
     const [connected, setConnected] = useState(false);
 
+    function stopHeartbeat() {
+        if (heartbeatTimerRef.current === null) return;
+
+        window.clearTimeout(heartbeatTimerRef.current);
+        heartbeatTimerRef.current = null;
+    }
+
     function finishDisconnection(device: USBDevice) {
         if (deviceRef.current !== device) return;
+
+        stopHeartbeat();
 
         if (disconnectHandlerRef.current !== null) {
             navigator.usb.removeEventListener("disconnect", disconnectHandlerRef.current);
@@ -40,8 +53,67 @@ export function useUsb(onPacket: (packet: NetworkPacket) => void) {
         deviceRef.current = null;
         readPromiseRef.current = null;
         disconnectHandlerRef.current = null;
+        heartbeatPromiseRef.current = null;
         keepReadingRef.current = false;
         setConnected(false);
+    }
+
+    async function sendConnectionSignal(device: USBDevice, connected: boolean) {
+        const result = await device.controlTransferOut({
+            requestType: "class",
+            recipient: "interface",
+            request: setControlLineStateRequest,
+            value: connected ? 1 : 0,
+            index: vendorInterfaceNumber,
+        });
+
+        if (result.status !== "ok") {
+            throw new Error(`WebUSB connection signal failed with status: ${result.status}`);
+        }
+    }
+
+    async function handleConnectionFailure(device: USBDevice, error: unknown) {
+        if (deviceRef.current !== device) return;
+
+        console.error(error);
+        finishDisconnection(device);
+        if (!device.opened) return;
+
+        try {
+            await device.close();
+        } catch (closeError) {
+            console.error(closeError);
+        }
+    }
+
+    function scheduleHeartbeat(device: USBDevice) {
+        heartbeatTimerRef.current = window.setTimeout(() => {
+            heartbeatTimerRef.current = null;
+
+            const heartbeatPromise = sendHeartbeat(device);
+            heartbeatPromiseRef.current = heartbeatPromise;
+
+            void heartbeatPromise.finally(() => {
+                if (heartbeatPromiseRef.current === heartbeatPromise) {
+                    heartbeatPromiseRef.current = null;
+                }
+            });
+        }, heartbeatIntervalMs);
+    }
+
+    async function sendHeartbeat(device: USBDevice) {
+        if (!keepReadingRef.current || deviceRef.current !== device) return;
+
+        try {
+            await sendConnectionSignal(device, true);
+        } catch (error) {
+            await handleConnectionFailure(device, error);
+            return;
+        }
+
+        if (keepReadingRef.current && deviceRef.current === device) {
+            scheduleHeartbeat(device);
+        }
     }
 
     async function connect() {
@@ -65,17 +137,7 @@ export function useUsb(onPacket: (packet: NetworkPacket) => void) {
 
             await device.claimInterface(vendorInterfaceNumber);
 
-            const connectionResult = await device.controlTransferOut({
-                requestType: "class",
-                recipient: "interface",
-                request: setControlLineStateRequest,
-                value: 1,
-                index: vendorInterfaceNumber,
-            });
-
-            if (connectionResult.status !== "ok") {
-                throw new Error("Could not notify the device of the WebUSB connection");
-            }
+            await sendConnectionSignal(device, true);
 
             deviceRef.current = device;
             keepReadingRef.current = true;
@@ -89,6 +151,7 @@ export function useUsb(onPacket: (packet: NetworkPacket) => void) {
             navigator.usb.addEventListener("disconnect", handlePhysicalDisconnection);
 
             readPromiseRef.current = readFromDevice(device);
+            scheduleHeartbeat(device);
         } catch (error) {
             console.error(error);
 
@@ -144,15 +207,7 @@ export function useUsb(onPacket: (packet: NetworkPacket) => void) {
             }
         } catch (error) {
             if (!keepReadingRef.current || deviceRef.current !== device) return;
-            console.error(error);
-            finishDisconnection(device);
-            if (!device.opened) return;
-
-            try {
-                await device.close();
-            } catch (closeError) {
-                console.error(closeError);
-            }
+            await handleConnectionFailure(device, error);
         }
     }
 
@@ -165,19 +220,17 @@ export function useUsb(onPacket: (packet: NetworkPacket) => void) {
         }
 
         keepReadingRef.current = false;
+        stopHeartbeat();
+
+        const heartbeatPromise = heartbeatPromiseRef.current;
+        if (heartbeatPromise !== null) {
+            await heartbeatPromise;
+        }
+
+        if (deviceRef.current !== device) return;
 
         try {
-            const disconnectionResult = await device.controlTransferOut({
-                requestType: "class",
-                recipient: "interface",
-                request: setControlLineStateRequest,
-                value: 0,
-                index: vendorInterfaceNumber,
-            });
-
-            if (disconnectionResult.status !== "ok") {
-                console.error("Could not notify the device of the WebUSB disconnection");
-            }
+            await sendConnectionSignal(device, false);
         } catch (error) {
             console.error(error);
         }

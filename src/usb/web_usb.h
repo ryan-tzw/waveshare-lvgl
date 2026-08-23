@@ -6,6 +6,7 @@
 
 #define WEB_USB_MAX_PAYLOAD_SIZE 240
 
+/* A true signal also refreshes the WebUSB heartbeat timeout. */
 void web_usb_set_connected(bool connected);
 /*
  * Return value: whether a connection change was available.

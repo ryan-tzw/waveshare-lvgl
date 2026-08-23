@@ -25,9 +25,24 @@ function handleWebUsbMessage(message: Uint8Array, onPacket: (packet: NetworkPack
 export function useUsb(onPacket: (packet: NetworkPacket) => void) {
     const deviceRef = useRef<USBDevice | null>(null);
     const readPromiseRef = useRef<Promise<void> | null>(null);
+    const disconnectHandlerRef = useRef<((event: USBConnectionEvent) => void) | null>(null);
     const keepReadingRef = useRef(false);
 
     const [connected, setConnected] = useState(false);
+
+    function finishDisconnection(device: USBDevice) {
+        if (deviceRef.current !== device) return;
+
+        if (disconnectHandlerRef.current !== null) {
+            navigator.usb.removeEventListener("disconnect", disconnectHandlerRef.current);
+        }
+
+        deviceRef.current = null;
+        readPromiseRef.current = null;
+        disconnectHandlerRef.current = null;
+        keepReadingRef.current = false;
+        setConnected(false);
+    }
 
     async function connect() {
         if (!isWebUsbSupported) {
@@ -66,6 +81,13 @@ export function useUsb(onPacket: (packet: NetworkPacket) => void) {
             keepReadingRef.current = true;
             setConnected(true);
 
+            const handlePhysicalDisconnection = (event: USBConnectionEvent) => {
+                if (event.device !== device) return;
+                finishDisconnection(device);
+            };
+            disconnectHandlerRef.current = handlePhysicalDisconnection;
+            navigator.usb.addEventListener("disconnect", handlePhysicalDisconnection);
+
             readPromiseRef.current = readFromDevice(device);
         } catch (error) {
             console.error(error);
@@ -80,7 +102,7 @@ export function useUsb(onPacket: (packet: NetworkPacket) => void) {
         let receiveBuffer = new Uint8Array();
 
         try {
-            while (keepReadingRef.current) {
+            while (keepReadingRef.current && deviceRef.current === device) {
                 const result = await device.transferIn(
                     vendorEndpointNumber,
                     vendorEndpointBufferSize,
@@ -89,43 +111,47 @@ export function useUsb(onPacket: (packet: NetworkPacket) => void) {
                 if (result.status !== "ok") {
                     throw new Error(`WebUSB read failed with status: ${result.status}`);
                 }
+                if (!result.data) continue;
 
-                if (result.data) {
-                    const receivedBytes = new Uint8Array(
-                        result.data.buffer,
-                        result.data.byteOffset,
-                        result.data.byteLength,
-                    );
-                    const combinedBuffer = new Uint8Array(
-                        receiveBuffer.length + receivedBytes.length,
-                    );
+                const receivedBytes = new Uint8Array(
+                    result.data.buffer,
+                    result.data.byteOffset,
+                    result.data.byteLength,
+                );
+                const combinedBuffer = new Uint8Array(receiveBuffer.length + receivedBytes.length);
 
-                    combinedBuffer.set(receiveBuffer);
-                    combinedBuffer.set(receivedBytes, receiveBuffer.length);
-                    receiveBuffer = combinedBuffer;
+                combinedBuffer.set(receiveBuffer);
+                combinedBuffer.set(receivedBytes, receiveBuffer.length);
+                receiveBuffer = combinedBuffer;
 
-                    while (receiveBuffer.length >= messageLengthSize) {
-                        const lowByte = receiveBuffer[0];
-                        const highByte = receiveBuffer[1];
-                        const messageLength = (highByte << 8) | lowByte;
+                while (receiveBuffer.length >= messageLengthSize) {
+                    const lowByte = receiveBuffer[0];
+                    const highByte = receiveBuffer[1];
+                    const messageLength = (highByte << 8) | lowByte;
 
-                        if (messageLength > maximumMessageLength) {
-                            throw new Error(`WebUSB message is too large: ${messageLength} bytes`);
-                        }
-
-                        const frameLength = messageLengthSize + messageLength;
-                        if (receiveBuffer.length < frameLength) break;
-
-                        const message = receiveBuffer.slice(messageLengthSize, frameLength);
-                        handleWebUsbMessage(message, onPacket);
-
-                        receiveBuffer = receiveBuffer.slice(frameLength);
+                    if (messageLength > maximumMessageLength) {
+                        throw new Error(`WebUSB message is too large: ${messageLength} bytes`);
                     }
+
+                    const frameLength = messageLengthSize + messageLength;
+                    if (receiveBuffer.length < frameLength) break;
+
+                    const message = receiveBuffer.slice(messageLengthSize, frameLength);
+                    handleWebUsbMessage(message, onPacket);
+
+                    receiveBuffer = receiveBuffer.slice(frameLength);
                 }
             }
         } catch (error) {
-            if (keepReadingRef.current) {
-                console.error(error);
+            if (!keepReadingRef.current || deviceRef.current !== device) return;
+            console.error(error);
+            finishDisconnection(device);
+            if (!device.opened) return;
+
+            try {
+                await device.close();
+            } catch (closeError) {
+                console.error(closeError);
             }
         }
     }
@@ -156,12 +182,14 @@ export function useUsb(onPacket: (packet: NetworkPacket) => void) {
             console.error(error);
         }
 
-        await device.close();
-        await readPromiseRef.current;
+        try {
+            await device.close();
+        } catch (error) {
+            console.error(error);
+        }
 
-        deviceRef.current = null;
-        readPromiseRef.current = null;
-        setConnected(false);
+        await readPromiseRef.current;
+        finishDisconnection(device);
     }
 
     return {

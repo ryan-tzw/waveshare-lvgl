@@ -1,4 +1,4 @@
-import { useReducer } from "react";
+import { useEffect, useReducer } from "react";
 
 import type { NetworkPacket } from "./generated/protocol_pb";
 import { deriveNetworkGraph, nodeIdToHex } from "./networkGraph";
@@ -142,18 +142,16 @@ export function useNetwork() {
     const usb = useUsb(handlePacket);
     const graph = deriveNetworkGraph(state.gateway, state.linkStates, state.deviceStates);
 
-    async function disconnectWebUsb() {
-        try {
-            await usb.disconnect();
-        } finally {
+    useEffect(() => {
+        if (!usb.connected) {
             dispatch({ type: "disconnected" });
         }
-    }
+    }, [usb.connected]);
 
     return {
         webUsbConnected: usb.connected,
         connectWebUsb: usb.connect,
-        disconnectWebUsb,
+        disconnectWebUsb: usb.disconnect,
         graph,
     };
 }

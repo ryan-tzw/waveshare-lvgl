@@ -65,3 +65,7 @@ void tud_cdc_line_state_cb(uint8_t itf, bool dtr, bool rts) {
         tud_cdc_write_str("\r\nConnected via serial\r\n");
     }
 }
+
+void tud_umount_cb(void) {
+    web_usb_set_connected(false);
+}

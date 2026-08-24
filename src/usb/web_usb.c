@@ -1,3 +1,9 @@
+/*
+ * Device-side WebUSB transport. Tracks browser connection liveness, reports
+ * connection changes, stores one length-prefixed outgoing message, and drains
+ * it through the TinyUSB vendor interface.
+ */
+
 #include "web_usb.h"
 
 #include "pico/time.h"

@@ -1,3 +1,9 @@
+/*
+ * Coordinates browser-facing gateway output. Announces the connected board,
+ * transfers the initial and updated LINK_STATE database, and forwards routed
+ * device states whenever the WebUSB transport is ready.
+ */
+
 #include "gateway.h"
 
 #include "network.h"

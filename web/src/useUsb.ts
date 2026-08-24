@@ -1,3 +1,9 @@
+/*
+ * Browser-side WebUSB transport. Opens and claims the vendor interface,
+ * maintains connection liveness through heartbeats, reads length-prefixed
+ * protobuf packets, and passes decoded NetworkPackets to its caller.
+ */
+
 import { fromBinary } from "@bufbuild/protobuf";
 import { useRef, useState } from "react";
 

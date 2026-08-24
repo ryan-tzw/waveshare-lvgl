@@ -1,3 +1,9 @@
+/*
+ * Browser-side network state. Validates decoded NetworkPackets, stores the
+ * connected gateway, LINK_STATE database, and latest device states, then
+ * exposes WebUSB connection controls and a derived network graph.
+ */
+
 import { useEffect, useReducer } from "react";
 
 import type { NetworkPacket } from "./generated/protocol_pb";

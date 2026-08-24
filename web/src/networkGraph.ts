@@ -1,3 +1,9 @@
+/*
+ * Pure network-graph derivation. Builds the gateway-reachable graph from the
+ * latest LINK_STATE and device-state packets, accepting only reciprocal port
+ * observations and excluding stale or unreachable database entries.
+ */
+
 import type { DeviceState, NetworkPacket } from "./generated/protocol_pb";
 
 type ReportedDeviceType = NonNullable<DeviceState["state"]["case"]>;

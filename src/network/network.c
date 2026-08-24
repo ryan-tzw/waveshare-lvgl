@@ -1,16 +1,24 @@
+/*
+ * Top-level UART network coordinator. Owns the four physical ports and joins
+ * neighbour discovery, LINK_STATE synchronization, gateway routing, and
+ * periodic and forwarded device-state transmission into one update loop.
+ */
+
+#include "network.h"
+
 #include "device_state.h"
 #include "framed_uart.h"
 #include "gateway_routes.h"
 #include "link_state_database.h"
 #include "link_state_sync.h"
 #include "neighbor_table.h"
-#include "network.h"
 #include "network_diagnostics.h"
 #include "node_identity.h"
+#include "pio_uart.h"
+
 #include "pb_decode.h"
 #include "pb_encode.h"
 #include "pico/time.h"
-#include "pio_uart.h"
 #include "protocol.pb.h"
 
 #include <stdio.h>

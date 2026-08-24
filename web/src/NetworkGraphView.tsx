@@ -1,3 +1,8 @@
+/*
+ * Canvas presentation of the derived network graph. Calculates deterministic
+ * node positions and draws the current nodes, links, and device types.
+ */
+
 import { useEffect, useRef } from "react";
 
 import type { NetworkGraph } from "./networkGraph";

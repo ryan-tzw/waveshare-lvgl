@@ -37,8 +37,23 @@ function networkReducer(state: NetworkState, action: NetworkAction): NetworkStat
             };
         }
         case "linkStateReceived": {
+            const previousLinkState = state.linkStates.get(action.nodeId);
             const linkStates = new Map(state.linkStates);
             linkStates.set(action.nodeId, action.packet);
+
+            if (
+                previousLinkState !== undefined &&
+                previousLinkState.bootId !== action.packet.bootId
+            ) {
+                const deviceStates = new Map(state.deviceStates);
+                deviceStates.delete(action.nodeId);
+
+                return {
+                    ...state,
+                    linkStates,
+                    deviceStates,
+                };
+            }
 
             return {
                 ...state,
@@ -49,6 +64,22 @@ function networkReducer(state: NetworkState, action: NetworkAction): NetworkStat
             if (
                 state.gateway === null ||
                 nodeIdToHex(state.gateway.sourceNodeId) !== action.destinationGatewayNodeId
+            ) {
+                return state;
+            }
+
+            const linkState = state.linkStates.get(action.nodeId);
+
+            if (linkState === undefined || linkState.bootId !== action.packet.bootId) {
+                return state;
+            }
+
+            const previousDeviceState = state.deviceStates.get(action.nodeId);
+
+            if (
+                previousDeviceState !== undefined &&
+                previousDeviceState.bootId === action.packet.bootId &&
+                previousDeviceState.sequence >= action.packet.sequence
             ) {
                 return state;
             }

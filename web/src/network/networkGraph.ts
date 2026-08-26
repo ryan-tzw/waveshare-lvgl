@@ -4,7 +4,7 @@
  * observations and excluding stale or unreachable database entries.
  */
 
-import type { DeviceState, NetworkPacket } from "./generated/protocol_pb";
+import type { DeviceState, NetworkPacket } from "../generated/protocol_pb";
 
 type ReportedDeviceType = NonNullable<DeviceState["state"]["case"]>;
 export type NetworkDeviceType = ReportedDeviceType | "unknown" | "unselected";

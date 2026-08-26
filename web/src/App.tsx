@@ -1,7 +1,7 @@
 import "./App.css";
 import { ConnectButton } from "./ConnectButton";
-import { NetworkGraphView } from "./NetworkGraphView";
-import { useNetwork } from "./useNetwork";
+import { useNetwork } from "./network/useNetwork";
+import { NetworkGraphView } from "./rendering/NetworkGraphView";
 
 function App() {
     const network = useNetwork();

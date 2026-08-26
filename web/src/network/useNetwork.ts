@@ -6,7 +6,7 @@
 
 import { useEffect, useReducer } from "react";
 
-import type { NetworkPacket } from "./generated/protocol_pb";
+import type { NetworkPacket } from "../generated/protocol_pb";
 import { deriveNetworkGraph, nodeIdToHex } from "./networkGraph";
 import { useUsb } from "./useUsb";
 

@@ -5,7 +5,7 @@
 
 import { useEffect, useRef } from "react";
 
-import type { NetworkGraph } from "./networkGraph";
+import type { NetworkGraph } from "../network/networkGraph";
 
 type NetworkGraphViewProps = {
     graph: NetworkGraph;

@@ -7,7 +7,7 @@
 import { fromBinary } from "@bufbuild/protobuf";
 import { useRef, useState } from "react";
 
-import { type NetworkPacket, NetworkPacketSchema } from "./generated/protocol_pb";
+import { type NetworkPacket, NetworkPacketSchema } from "../generated/protocol_pb";
 
 const isWebUsbSupported = "usb" in navigator;
 const usbVendorId = 0xcafe;

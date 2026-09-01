@@ -67,6 +67,7 @@ add_subdirectory(./src/pio_uart)
 add_subdirectory(./src/framed_uart)
 add_subdirectory(./src/node_identity)
 add_subdirectory(./protocol)
+add_subdirectory(./src/diagnostics)
 add_subdirectory(./src/gateway)
 add_subdirectory(./src/network)
 

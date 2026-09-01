@@ -1,13 +1,16 @@
 #include "init_widgets.h"
 #include "device_state.h"
+#include "timing_diagnostics.h"
 
 // tileview
 static lv_obj_t *tileview;
 static lv_obj_t *tile00;
 static lv_obj_t *tile01;
+static lv_obj_t *tile02;
 
 // widgets
 static lv_obj_t *btn_print_database;
+
 static bool link_state_database_print_requested = false;
 
 // carousel stuff
@@ -39,7 +42,8 @@ void init_widgets(void) {
     tileview = lv_tileview_create(lv_scr_act());
     lv_obj_set_scrollbar_mode(tileview,  LV_SCROLLBAR_MODE_ON);
     tile00 = lv_tileview_add_tile(tileview, 0, 0, LV_DIR_BOTTOM);
-    tile01 = lv_tileview_add_tile(tileview, 0, 1, LV_DIR_TOP);
+    tile01 = lv_tileview_add_tile(tileview, 0, 1, LV_DIR_TOP | LV_DIR_BOTTOM);
+    tile02 = lv_tileview_add_tile(tileview, 0, 2, LV_DIR_TOP);
 
     /*==================== 
         Widgets
@@ -120,6 +124,10 @@ void init_widgets(void) {
     lv_obj_center       (btn_print_database_label);
     lv_obj_add_style    (btn_print_database_label, &style_label, 0);
 
+    /*
+        Row 2
+    */
+    timing_diagnostics_init(tile02);
 }
 
 static void carousel_cb(lv_event_t *event) {

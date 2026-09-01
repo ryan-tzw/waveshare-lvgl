@@ -78,8 +78,6 @@ static size_t           local_gateway_packet_queue_read_index  = 0;
 static size_t           local_gateway_packet_queue_write_index = 0;
 static size_t           local_gateway_packet_queue_count       = 0;
 
-// manually toggle for timing diagnostic output
-static bool timing_output_enabled = false;
 static const bool routed_device_state_trace_enabled = false;
 
 /* ==========================================================================
@@ -95,8 +93,6 @@ static void encode_and_send_network_packet(FramedUart *destination_uart, const N
 }
 
 static void send_hello(FramedUart *framed_uart, NodeIdentity *identity, uint32_t sender_port) {
-    uint64_t start_time_us = time_us_64();
-
     NetworkPacket packet = NetworkPacket_init_zero;
     memcpy(packet.source_node_id, identity->node_id.id, sizeof(packet.source_node_id));
     packet.boot_id                   = identity->boot_id;
@@ -104,15 +100,6 @@ static void send_hello(FramedUart *framed_uart, NodeIdentity *identity, uint32_t
     packet.payload.hello.sender_port = sender_port;
 
     encode_and_send_network_packet(framed_uart, &packet);
-
-    uint64_t elapsed_time_us = time_us_64() - start_time_us;
-    if (timing_output_enabled) {
-        printf(
-            "HELLO send on port %lu: %llu us\n",
-            (unsigned long)sender_port,
-            (unsigned long long)elapsed_time_us
-        );
-    }
 }
 
 static void send_ack(FramedUart *framed_uart, const NodeIdentity *identity, const NetworkPacket *acknowledged_packet) {
@@ -547,11 +534,10 @@ void network_set_gateway_connected(bool connected) {
     request_link_state_scans_for_observed_neighbors();
 }
 
-void network_init(NodeIdentity *identity, bool enable_timing_output) {
+void network_init(NodeIdentity *identity) {
     hard_assert(identity != NULL);
 
-    node_identity         = identity;
-    timing_output_enabled = enable_timing_output;
+    node_identity = identity;
 
     neighbor_table_init();
     link_state_database_init();
@@ -588,19 +574,8 @@ void network_update(void) {
             sizeof(received_packet_bytes),
             &payload_length
         )) {
-            uint64_t packet_start_time_us = time_us_64();
-
             bool port_adjacency_changed = handle_received_packet(received_packet_bytes, payload_length, local_port);
             if (port_adjacency_changed) { adjacency_changed = true; }
-
-            uint64_t packet_elapsed_time_us = time_us_64() - packet_start_time_us;
-            if (timing_output_enabled) {
-                printf(
-                    "Packet handling on port %lu: %llu us\n",
-                    (unsigned long)local_port,
-                    (unsigned long long)packet_elapsed_time_us
-                );
-            }
         }
     }
 

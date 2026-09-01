@@ -8,10 +8,7 @@
 #include "protocol.pb.h"
 
 /* The NodeIdentity must remain valid while the network is running. */
-void network_init(
-    NodeIdentity *node_identity,
-    bool timing_output_enabled
-);
+void network_init(NodeIdentity *node_identity);
 void network_update(void);
 
 /* A changed value originates and synchronizes a new local LINK_STATE. */

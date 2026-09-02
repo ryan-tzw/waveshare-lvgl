@@ -4,6 +4,7 @@
 
 #include "checksum.h"
 #include "cobs.h"
+#include "pico/assert.h"
 
 bool framed_uart_init(FramedUart *framed_uart, PioUart *uart) {
     if (framed_uart == NULL || uart == NULL) { return false; }
@@ -11,6 +12,10 @@ bool framed_uart_init(FramedUart *framed_uart, PioUart *uart) {
 
     framed_uart->uart              = uart;
     framed_uart->rx_encoded_length = 0;
+    framed_uart->received_frames   = 0;
+    framed_uart->cobs_errors       = 0;
+    framed_uart->crc_errors        = 0;
+    framed_uart->oversized_frames  = 0;
     framed_uart->discarding_frame  = false;
     framed_uart->initialized       = true;
 
@@ -68,6 +73,7 @@ bool framed_uart_try_receive(
             if (framed_uart->rx_encoded_length >= FRAMED_UART_MAX_ENCODED_SIZE) {
                 framed_uart->rx_encoded_length = 0;
                 framed_uart->discarding_frame  = true;
+                framed_uart->oversized_frames++;
                 continue;
             }
 
@@ -93,9 +99,15 @@ bool framed_uart_try_receive(
 
         framed_uart->rx_encoded_length = 0;
 
-        if (decode_result.status != COBS_DECODE_OK ||
-            decode_result.out_len < FRAMED_UART_CRC_SIZE
-        ) { continue; }
+        if (decode_result.status != COBS_DECODE_OK) {
+            framed_uart->cobs_errors++;
+            continue;
+        }
+
+        if (decode_result.out_len < FRAMED_UART_CRC_SIZE) {
+            framed_uart->crc_errors++;
+            continue;
+        }
 
         size_t   payload_length = decode_result.out_len - FRAMED_UART_CRC_SIZE;
         uint8_t  low_byte       = framed_uart->rx_decoded_buffer[payload_length];
@@ -103,15 +115,39 @@ bool framed_uart_try_receive(
         uint16_t received_crc   = ((uint16_t)high_byte << 8) | low_byte;
         uint16_t expected_crc   = crc_modbus(framed_uart->rx_decoded_buffer, payload_length);
 
-        if (received_crc != expected_crc || payload_length > capacity) { continue; }
+        if (received_crc != expected_crc) {
+            framed_uart->crc_errors++;
+            continue;
+        }
+
+        if (payload_length > capacity) {
+            framed_uart->oversized_frames++;
+            continue;
+        }
 
         if (payload_length > 0) {
             memcpy(payload, framed_uart->rx_decoded_buffer, payload_length);
         }
 
         *length = payload_length;
+        framed_uart->received_frames++;
         return true;
     }
 
     return false;
+}
+
+FramedUartStatistics framed_uart_get_statistics(const FramedUart *framed_uart) {
+    hard_assert(framed_uart != NULL);
+    hard_assert(framed_uart->initialized);
+
+    FramedUartStatistics statistics = {
+        .received_frames    = framed_uart->received_frames,
+        .cobs_errors        = framed_uart->cobs_errors,
+        .crc_errors         = framed_uart->crc_errors,
+        .oversized_frames   = framed_uart->oversized_frames,
+        .uart_dropped_bytes = pio_uart_rx_dropped_bytes(framed_uart->uart)
+    };
+
+    return statistics;
 }

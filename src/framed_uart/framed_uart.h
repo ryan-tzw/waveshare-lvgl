@@ -13,12 +13,24 @@
 #define FRAMED_UART_MAX_FRAME_SIZE (FRAMED_UART_MAX_ENCODED_SIZE + 1)
 
 typedef struct {
+    uint32_t received_frames;
+    uint32_t cobs_errors;
+    uint32_t crc_errors;
+    uint32_t oversized_frames;
+    uint32_t uart_dropped_bytes;
+} FramedUartStatistics;
+
+typedef struct {
     PioUart *uart;
     uint8_t tx_unencoded_buffer[FRAMED_UART_MAX_DATA_SIZE];
     uint8_t tx_encoded_buffer[FRAMED_UART_MAX_FRAME_SIZE];
     uint8_t rx_encoded_buffer[FRAMED_UART_MAX_ENCODED_SIZE];
     uint8_t rx_decoded_buffer[FRAMED_UART_MAX_DATA_SIZE];
     size_t rx_encoded_length;
+    uint32_t received_frames;
+    uint32_t cobs_errors;
+    uint32_t crc_errors;
+    uint32_t oversized_frames;
     bool discarding_frame;
     bool initialized;
 } FramedUart;
@@ -47,3 +59,6 @@ bool framed_uart_try_receive(
     size_t capacity,
     size_t *length
 );
+
+/* Returns cumulative receive statistics collected since initialization. */
+FramedUartStatistics framed_uart_get_statistics(const FramedUart *framed_uart);

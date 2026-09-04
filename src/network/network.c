@@ -140,7 +140,7 @@ static bool queue_packet_for_local_gateway(const NetworkPacket *packet) {
     return true;
 }
 
-static void originate_device_state_for_gateway(const GatewayRoute *route, DeviceType device_type) {
+static void originate_device_state_for_gateway(const GatewayRoute *route) {
     hard_assert(route != NULL);
 
     NetworkPacket packet = NetworkPacket_init_zero;
@@ -153,14 +153,7 @@ static void originate_device_state_for_gateway(const GatewayRoute *route, Device
     memcpy(routed_message->destination_gateway_node_id, route->node_id, sizeof(routed_message->destination_gateway_node_id));
     routed_message->remaining_hops   = route->hop_count;
     routed_message->has_device_state = true;
-
-    DeviceState *device_state = &routed_message->device_state;
-    switch (device_type) {
-        case DEVICE_TYPE_NONE:    { device_state->which_state = 0;                       } break;
-        case DEVICE_TYPE_BULB:    { device_state->which_state = DeviceState_bulb_tag;    } break;
-        case DEVICE_TYPE_BATTERY: { device_state->which_state = DeviceState_battery_tag; } break;
-        case DEVICE_TYPE_SWITCH:  { device_state->which_state = DeviceState_switch_tag;  } break;
-    }
+    device_state_build_message(&routed_message->device_state);
 
     if (route->is_local) {
         queue_packet_for_local_gateway(&packet);
@@ -171,13 +164,12 @@ static void originate_device_state_for_gateway(const GatewayRoute *route, Device
 }
 
 static void originate_device_state_for_gateways(void) {
-    DeviceType device_type = device_state_get_type();
-    size_t route_count     = gateway_routes_get_count();
+    size_t route_count = gateway_routes_get_count();
 
     for (size_t route_index = 0; route_index < route_count; route_index++) {
         GatewayRoute route;
         hard_assert( gateway_routes_get(route_index, &route) );
-        originate_device_state_for_gateway(&route, device_type);
+        originate_device_state_for_gateway(&route);
     }
 }
 

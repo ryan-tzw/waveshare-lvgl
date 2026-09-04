@@ -8,6 +8,11 @@
 static lv_obj_t *tileview;
 static lv_obj_t *tile00;
 static lv_obj_t *tile01;
+static lv_obj_t *tile02;
+
+// widgets
+static lv_obj_t *switch_state_control;
+static lv_obj_t *switch_state_label;
 
 // carousel stuff
 typedef struct {
@@ -32,6 +37,8 @@ static lv_obj_t *carousel_buttons[ITEMS_LEN];
 // callbacks
 static void carousel_cb        (lv_event_t *event);
 static void scroll_animation_cb(lv_event_t *event);
+static void switch_state_cb    (lv_event_t *event);
+static void update_switch_control_visibility(DeviceType device_type);
 
 void init_widgets(void) {
     // Create tileview and tiles
@@ -39,7 +46,8 @@ void init_widgets(void) {
     lv_obj_add_event_cb      (tileview, scroll_animation_cb, LV_EVENT_SCROLL_BEGIN, NULL);
     lv_obj_set_scrollbar_mode(tileview,  LV_SCROLLBAR_MODE_ON);
     tile00 = lv_tileview_add_tile(tileview, 0, 0, LV_DIR_BOTTOM);
-    tile01 = lv_tileview_add_tile(tileview, 0, 1, LV_DIR_TOP);
+    tile01 = lv_tileview_add_tile(tileview, 0, 1, LV_DIR_TOP | LV_DIR_BOTTOM);
+    tile02 = lv_tileview_add_tile(tileview, 0, 2, LV_DIR_TOP);
 
     /*==================== 
         Widgets
@@ -104,7 +112,20 @@ void init_widgets(void) {
     /*
         Row 1
     */
-    debug_diagnostics_init(tile01);
+    switch_state_control = lv_switch_create(tile01);
+    lv_obj_add_event_cb (switch_state_control, switch_state_cb, LV_EVENT_VALUE_CHANGED, NULL);
+    lv_obj_align        (switch_state_control, LV_ALIGN_CENTER, -36, 0);
+    lv_obj_add_flag     (switch_state_control, LV_OBJ_FLAG_HIDDEN);
+
+    switch_state_label = lv_label_create(tile01);
+    lv_label_set_text (switch_state_label, "Switch on");
+    lv_obj_align_to   (switch_state_label, switch_state_control, LV_ALIGN_OUT_RIGHT_MID, 12, 0);
+    lv_obj_add_flag   (switch_state_label, LV_OBJ_FLAG_HIDDEN);
+
+    /*
+        Row 2
+    */
+    debug_diagnostics_init(tile02);
 }
 
 static void carousel_cb(lv_event_t *event) {
@@ -116,6 +137,7 @@ static void carousel_cb(lv_event_t *event) {
         lv_obj_clear_state(target, LV_STATE_CHECKED);
         selected_button = NULL;
         device_state_set_type(DEVICE_TYPE_NONE);
+        update_switch_control_visibility(DEVICE_TYPE_NONE);
         return;
     }
     if (selected_button != NULL) {
@@ -128,9 +150,33 @@ static void carousel_cb(lv_event_t *event) {
     for (int i = 0; i < ITEMS_LEN; i++) {
         if (target == carousel_buttons[i]) {
             device_state_set_type(items[i].device_type);
+            update_switch_control_visibility(items[i].device_type);
             break;
         }
     }
+}
+
+static void switch_state_cb(lv_event_t *event) {
+    lv_obj_t *switch_control = lv_event_get_target(event);
+    bool switch_on = lv_obj_has_state(switch_control, LV_STATE_CHECKED);
+    device_state_set_switch_on(switch_on);
+}
+
+static void update_switch_control_visibility(DeviceType device_type) {
+    if (device_type != DEVICE_TYPE_SWITCH) {
+        lv_obj_add_flag(switch_state_control, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(switch_state_label, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+
+    if (device_state_get_switch_on()) {
+        lv_obj_add_state(switch_state_control, LV_STATE_CHECKED);
+    } else {
+        lv_obj_clear_state(switch_state_control, LV_STATE_CHECKED);
+    }
+
+    lv_obj_clear_flag(switch_state_control, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(switch_state_label, LV_OBJ_FLAG_HIDDEN);
 }
 
 static void scroll_animation_cb(lv_event_t *event) {

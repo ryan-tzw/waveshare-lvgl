@@ -30,7 +30,6 @@
    ========================================================================== */
 
 #define PIO_UART_BAUD        115200
-#define PIO_UART_PORT_COUNT  4
 
 #define HELLO_INTERVAL_MS              500
 #define DEVICE_STATE_SEND_INTERVAL_MS  1000
@@ -59,15 +58,15 @@ typedef struct {
     uint32_t rx_pin;
 } PioUartPinPair;
 
-static const PioUartPinPair pio_uart_pin_pairs[PIO_UART_PORT_COUNT] = {
+static const PioUartPinPair pio_uart_pin_pairs[NETWORK_PORT_COUNT] = {
     { .tx_pin = 3,  .rx_pin = 0  },
     { .tx_pin = 4,  .rx_pin = 10 },
     { .tx_pin = 6,  .rx_pin = 5  },
     { .tx_pin = 23, .rx_pin = 11 }
 };
 
-static PioUart          pio_uarts[PIO_UART_PORT_COUNT]    = {0};
-static FramedUart       framed_uarts[PIO_UART_PORT_COUNT] = {0};
+static PioUart          pio_uarts[NETWORK_PORT_COUNT]    = {0};
+static FramedUart       framed_uarts[NETWORK_PORT_COUNT] = {0};
 static NodeIdentity     *node_identity                    = NULL;
 static bool             local_gateway_connected           = false;
 static absolute_time_t  next_hello_time;
@@ -166,7 +165,7 @@ static void originate_device_state_for_gateway(const GatewayRoute *route, Device
     if (route->is_local) {
         queue_packet_for_local_gateway(&packet);
     } else {
-        hard_assert(route->local_port < PIO_UART_PORT_COUNT);
+        hard_assert(route->local_port < NETWORK_PORT_COUNT);
         encode_and_send_network_packet(&framed_uarts[route->local_port], &packet);
     }
 }
@@ -186,7 +185,7 @@ static void forward_routed_message(NetworkPacket *packet, const GatewayRoute *ro
     hard_assert(packet != NULL);
     hard_assert(route != NULL);
     hard_assert(!route->is_local);
-    hard_assert(route->local_port < PIO_UART_PORT_COUNT);
+    hard_assert(route->local_port < NETWORK_PORT_COUNT);
     hard_assert(packet->which_payload == NetworkPacket_routed_message_tag);
     hard_assert(packet->payload.routed_message.remaining_hops > 1);
 
@@ -208,7 +207,7 @@ static void clear_link_state_knowledge_for_port(uint32_t local_port) {
    ========================================================================== */
 
 static void request_link_state_scans_for_observed_neighbors(void) {
-    for (uint32_t local_port = 0; local_port < PIO_UART_PORT_COUNT; local_port++) {
+    for (uint32_t local_port = 0; local_port < NETWORK_PORT_COUNT; local_port++) {
         const Neighbor *neighbor = neighbor_table_get(local_port);
         if (neighbor->observed) {
             link_state_sync_request_scan(local_port);
@@ -237,7 +236,7 @@ static bool process_received_link_state(const NetworkPacket *packet, uint32_t lo
 
     switch (store_result) {
         case LINK_STATE_STORE_NEW: {
-            gateway_routes_recalculate(PIO_UART_PORT_COUNT);
+            gateway_routes_recalculate(NETWORK_PORT_COUNT);
             printf(
                 "Remote LINK_STATE stored on port %lu\n",
                 (unsigned long)local_port
@@ -246,7 +245,7 @@ static bool process_received_link_state(const NetworkPacket *packet, uint32_t lo
         } break;
 
         case LINK_STATE_STORE_UPDATED: {
-            gateway_routes_recalculate(PIO_UART_PORT_COUNT);
+            gateway_routes_recalculate(NETWORK_PORT_COUNT);
             printf(
                 "Remote LINK_STATE updated on port %lu\n",
                 (unsigned long)local_port
@@ -304,7 +303,7 @@ static void originate_local_link_state(NodeIdentity *identity) {
     LinkState *link_state = &packet.payload.link_state;
     link_state->gateway_connected = local_gateway_connected;
 
-    for (uint32_t local_port = 0; local_port < PIO_UART_PORT_COUNT; local_port++) {
+    for (uint32_t local_port = 0; local_port < NETWORK_PORT_COUNT; local_port++) {
         const Neighbor *neighbor = neighbor_table_get(local_port);
 
         if (!neighbor->observed) { continue; }
@@ -319,7 +318,7 @@ static void originate_local_link_state(NodeIdentity *identity) {
     }
 
     link_state_database_store_local(&packet);
-    gateway_routes_recalculate(PIO_UART_PORT_COUNT);
+    gateway_routes_recalculate(NETWORK_PORT_COUNT);
 
     printf("Local LINK_STATE updated\n");
     network_diagnostics_print_link_state(&packet);
@@ -477,7 +476,7 @@ static bool disconnect_timed_out_neighbors(void) {
     uint64_t current_time_us = time_us_64();
     bool neighbor_disconnected = false;
 
-    for (uint32_t local_port = 0; local_port < PIO_UART_PORT_COUNT; local_port++) {
+    for (uint32_t local_port = 0; local_port < NETWORK_PORT_COUNT; local_port++) {
         NeighborChanges neighbor_changes = neighbor_table_check_timeout(local_port, current_time_us, NEIGHBOR_TIMEOUT_US);
 
         if (!(neighbor_changes & NEIGHBOR_CHANGE_DISCONNECTED)) { continue; }
@@ -505,6 +504,19 @@ static bool disconnect_timed_out_neighbors(void) {
 void network_print_link_state_database(void)         { network_diagnostics_print_link_state_database(); }
 void network_print_gateway_routes(void)              { network_diagnostics_print_gateway_routes();      }
 void network_clear_link_state_database_updates(void) { link_state_database_clear_updates();             }
+
+bool network_get_port_statistics(uint32_t local_port, NetworkPortStatistics *statistics) {
+    if (statistics == NULL || local_port >= NETWORK_PORT_COUNT) { return false; }
+
+    FramedUartStatistics framed_uart_statistics = framed_uart_get_statistics(&framed_uarts[local_port]);
+
+    statistics->received_frames    = framed_uart_statistics.received_frames;
+    statistics->cobs_errors        = framed_uart_statistics.cobs_errors;
+    statistics->crc_errors         = framed_uart_statistics.crc_errors;
+    statistics->oversized_frames   = framed_uart_statistics.oversized_frames;
+    statistics->uart_dropped_bytes = framed_uart_statistics.uart_dropped_bytes;
+    return true;
+}
 
 bool network_get_link_state_database_packet(size_t entry_index, NetworkPacket *packet) {
     return link_state_database_get_packet(entry_index, packet); }
@@ -543,7 +555,7 @@ void network_init(NodeIdentity *identity) {
     link_state_database_init();
     link_state_sync_init();
 
-    for (uint32_t local_port = 0; local_port < PIO_UART_PORT_COUNT; local_port++) {
+    for (uint32_t local_port = 0; local_port < NETWORK_PORT_COUNT; local_port++) {
         uint32_t tx_pin = pio_uart_pin_pairs[local_port].tx_pin;
         uint32_t rx_pin = pio_uart_pin_pairs[local_port].rx_pin;
 
@@ -561,13 +573,13 @@ void network_update(void) {
     bool adjacency_changed = false;
 
     if (time_reached(next_hello_time)) {
-        for (uint32_t local_port = 0; local_port < PIO_UART_PORT_COUNT; local_port++) {
+        for (uint32_t local_port = 0; local_port < NETWORK_PORT_COUNT; local_port++) {
             send_hello(&framed_uarts[local_port], node_identity, local_port);
         }
         next_hello_time = make_timeout_time_ms(HELLO_INTERVAL_MS);
     }
 
-    for (uint32_t local_port = 0; local_port < PIO_UART_PORT_COUNT; local_port++) {
+    for (uint32_t local_port = 0; local_port < NETWORK_PORT_COUNT; local_port++) {
         while (framed_uart_try_receive(
             &framed_uarts[local_port],
             received_packet_bytes,
@@ -591,7 +603,7 @@ void network_update(void) {
         next_device_state_send_time = make_timeout_time_ms(DEVICE_STATE_SEND_INTERVAL_MS);
     }
 
-    for (uint32_t local_port = 0; local_port < PIO_UART_PORT_COUNT; local_port++) {
+    for (uint32_t local_port = 0; local_port < NETWORK_PORT_COUNT; local_port++) {
         send_link_state_for_port_if_needed(local_port);
     }
 }

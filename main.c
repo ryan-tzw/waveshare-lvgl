@@ -5,6 +5,7 @@
 #include "node_identity.h"
 #include "pico/time.h"
 #include "timing_diagnostics.h"
+#include "transport_diagnostics.h"
 #include "tusb.h"
 #include "web_usb.h"
 
@@ -49,6 +50,7 @@ int main(void) {
         gateway_update(&node_identity);
         web_usb_update();
         tud_cdc_write_flush();
+        transport_diagnostics_update();
         lv_task_handler();
 
         uint64_t work_time_us = time_us_64() - loop_start_time_us;

@@ -2,14 +2,31 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 #include "link_state_database.h"
 #include "node_identity.h"
 #include "protocol.pb.h"
 
+#define NETWORK_PORT_COUNT 4
+
+typedef struct {
+    uint32_t received_frames;
+    uint32_t cobs_errors;
+    uint32_t crc_errors;
+    uint32_t oversized_frames;
+    uint32_t uart_dropped_bytes;
+} NetworkPortStatistics;
+
 /* The NodeIdentity must remain valid while the network is running. */
 void network_init(NodeIdentity *node_identity);
 void network_update(void);
+
+/*
+ * Return value: whether statistics were copied; null output and invalid ports return false.
+ * Output parameter: its cumulative receive statistics when true.
+ */
+bool network_get_port_statistics(uint32_t local_port, NetworkPortStatistics *statistics);
 
 /* A changed value originates and synchronizes a new local LINK_STATE. */
 void network_set_gateway_connected(bool connected);

@@ -1,3 +1,4 @@
+#include "debug_diagnostics.h"
 #include "gateway.h"
 #include "init.h"
 #include "init_widgets.h"
@@ -39,7 +40,7 @@ int main(void) {
     uint64_t loop_start_time_us = time_us_64();
 
     while (1) {
-        if (take_link_state_database_print_request()) {
+        if (debug_diagnostics_take_link_state_database_print_request()) {
             network_print_link_state_database();
             network_print_gateway_routes();
         }

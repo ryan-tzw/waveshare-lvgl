@@ -1,6 +1,6 @@
 /*
  * Collects main-loop timing samples and presents periodic summaries through
- * the LVGL diagnostics tile.
+ * the LVGL timing diagnostics page.
  */
 
 #include "timing_diagnostics.h"
@@ -14,11 +14,10 @@
 
 #define TIMING_REPORT_INTERVAL_MS 1000
 
-static lv_obj_t *td_switch;
-static lv_obj_t *td_status_label;
 static lv_obj_t *td_table;
 
 static bool initialized                           = false;
+static bool display_enabled                       = false;
 static absolute_time_t next_report_time;
 static uint64_t total_work_time_us                = 0;
 static uint64_t total_loop_time_us                = 0;
@@ -26,9 +25,7 @@ static uint64_t maximum_loop_time_us              = 0;
 static uint32_t loop_count                        = 0;
 static uint32_t peak_work_share_tenths_percent    = 0;
 
-static void timing_diagnostics_switch_cb(lv_event_t *event);
 static void reset_timing_diagnostics_table(void);
-static bool timing_diagnostics_enabled(void);
 static void update_timing_diagnostics(
     uint32_t average_work_share_tenths_percent,
     uint32_t peak_work_share_tenths_percent,
@@ -42,27 +39,14 @@ void timing_diagnostics_init(lv_obj_t *parent) {
     hard_assert(!initialized);
 
     lv_obj_t *title = lv_label_create(parent);
-    lv_label_set_text          (title, "Diagnostics");
+    lv_label_set_text          (title, "Timing");
     lv_obj_set_style_text_font (title, &lv_font_montserrat_24, 0);
     lv_obj_align               (title, LV_ALIGN_TOP_MID, 0, 32);
 
-    td_switch = lv_switch_create(parent);
-    lv_obj_add_event_cb (td_switch, timing_diagnostics_switch_cb, LV_EVENT_VALUE_CHANGED, NULL);
-    lv_obj_align        (td_switch, LV_ALIGN_TOP_MID, -32, 88);
-
-    lv_obj_t *switch_label = lv_label_create(parent);
-    lv_label_set_text (switch_label, "Enable");
-    lv_obj_align_to   (switch_label, td_switch, LV_ALIGN_OUT_RIGHT_MID, 12, 0);
-
-    td_status_label = lv_label_create(parent);
-    lv_label_set_text (td_status_label, "Timing diagnostics disabled");
-    lv_obj_align      (td_status_label, LV_ALIGN_CENTER, 0, 48);
-
     td_table = lv_table_create(parent);
     lv_obj_set_size             (td_table, DISP_HOR_RES - 16, 144);
-    lv_obj_align                (td_table, LV_ALIGN_CENTER, 0, 56);
+    lv_obj_align                (td_table, LV_ALIGN_CENTER, 0, 32);
     lv_obj_clear_flag           (td_table, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag             (td_table, LV_OBJ_FLAG_HIDDEN);
     lv_obj_set_style_text_font  (td_table, &lv_font_montserrat_14, LV_PART_ITEMS);
     lv_obj_set_style_pad_hor    (td_table, 4, LV_PART_ITEMS);
     lv_obj_set_style_pad_ver    (td_table, 4, LV_PART_ITEMS);
@@ -79,6 +63,13 @@ void timing_diagnostics_init(lv_obj_t *parent) {
 
     next_report_time = make_timeout_time_ms(TIMING_REPORT_INTERVAL_MS);
     initialized      = true;
+}
+
+void timing_diagnostics_set_enabled(bool enabled) {
+    hard_assert(initialized);
+
+    display_enabled = enabled;
+    if (display_enabled) { reset_timing_diagnostics_table(); }
 }
 
 void timing_diagnostics_record_loop(uint64_t work_time_us, uint64_t loop_time_us) {
@@ -106,7 +97,7 @@ void timing_diagnostics_record_loop(uint64_t work_time_us, uint64_t loop_time_us
     uint32_t average_work_share_tenths_percent =
         (uint32_t)((total_work_time_us * 1000) / total_loop_time_us);
 
-    if (timing_diagnostics_enabled()) {
+    if (display_enabled) {
         update_timing_diagnostics(
             average_work_share_tenths_percent,
             peak_work_share_tenths_percent,
@@ -124,19 +115,6 @@ void timing_diagnostics_record_loop(uint64_t work_time_us, uint64_t loop_time_us
     next_report_time                   = make_timeout_time_ms(TIMING_REPORT_INTERVAL_MS);
 }
 
-static void timing_diagnostics_switch_cb(lv_event_t *event) {
-    lv_obj_t *timing_switch = lv_event_get_target(event);
-
-    if (lv_obj_has_state(timing_switch, LV_STATE_CHECKED)) {
-        reset_timing_diagnostics_table();
-        lv_obj_add_flag(td_status_label, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_clear_flag(td_table, LV_OBJ_FLAG_HIDDEN);
-    } else {
-        lv_obj_add_flag(td_table, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_clear_flag(td_status_label, LV_OBJ_FLAG_HIDDEN);
-    }
-}
-
 static void reset_timing_diagnostics_table(void) {
     lv_table_set_cell_value(td_table, 1, 1, "--");
     lv_table_set_cell_value(td_table, 1, 2, "--");
@@ -144,10 +122,6 @@ static void reset_timing_diagnostics_table(void) {
     lv_table_set_cell_value(td_table, 2, 2, "--");
     lv_table_set_cell_value(td_table, 3, 1, "--");
     lv_table_set_cell_value(td_table, 3, 2, "");
-}
-
-static bool timing_diagnostics_enabled(void) {
-    return lv_obj_has_state(td_switch, LV_STATE_CHECKED);
 }
 
 static void update_timing_diagnostics(

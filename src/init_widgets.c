@@ -1,19 +1,13 @@
 #include "init_widgets.h"
+#include "debug_diagnostics.h"
 #include "device_state.h"
-#include "timing_diagnostics.h"
-#include "transport_diagnostics.h"
+
+#define SCROLL_ANIMATION_TIME_MS 100
 
 // tileview
 static lv_obj_t *tileview;
 static lv_obj_t *tile00;
 static lv_obj_t *tile01;
-static lv_obj_t *tile02;
-static lv_obj_t *tile12;
-
-// widgets
-static lv_obj_t *btn_print_database;
-
-static bool link_state_database_print_requested = false;
 
 // carousel stuff
 typedef struct {
@@ -36,27 +30,20 @@ static lv_obj_t *selected_button = NULL;
 static lv_obj_t *carousel_buttons[ITEMS_LEN];
 
 // callbacks
-static void carousel_cb          (lv_event_t *event);
-static void btn_print_database_cb(lv_event_t *event);
+static void carousel_cb        (lv_event_t *event);
+static void scroll_animation_cb(lv_event_t *event);
 
 void init_widgets(void) {
     // Create tileview and tiles
     tileview = lv_tileview_create(lv_scr_act());
+    lv_obj_add_event_cb      (tileview, scroll_animation_cb, LV_EVENT_SCROLL_BEGIN, NULL);
     lv_obj_set_scrollbar_mode(tileview,  LV_SCROLLBAR_MODE_ON);
     tile00 = lv_tileview_add_tile(tileview, 0, 0, LV_DIR_BOTTOM);
-    tile01 = lv_tileview_add_tile(tileview, 0, 1, LV_DIR_TOP | LV_DIR_BOTTOM);
-    tile02 = lv_tileview_add_tile(tileview, 0, 2, LV_DIR_TOP | LV_DIR_RIGHT);
-    tile12 = lv_tileview_add_tile(tileview, 1, 2, LV_DIR_LEFT);
+    tile01 = lv_tileview_add_tile(tileview, 0, 1, LV_DIR_TOP);
 
     /*==================== 
         Widgets
     ====================*/
-    // Styles
-    static lv_style_t style_label;
-    lv_style_init          (&style_label);
-    lv_style_set_text_font (&style_label, &lv_font_montserrat_24);
-    lv_style_set_pad_all   (&style_label, 24);
-    
     /*
         Row 0
     */
@@ -117,21 +104,7 @@ void init_widgets(void) {
     /*
         Row 1
     */
-    // Tile 01
-    btn_print_database = lv_btn_create(tile01);
-    lv_obj_add_event_cb (btn_print_database, btn_print_database_cb, LV_EVENT_CLICKED, NULL);
-    lv_obj_align        (btn_print_database, LV_ALIGN_CENTER, 0, 0);
-
-    lv_obj_t *btn_print_database_label = lv_label_create(btn_print_database);
-    lv_label_set_text   (btn_print_database_label, "Print database");
-    lv_obj_center       (btn_print_database_label);
-    lv_obj_add_style    (btn_print_database_label, &style_label, 0);
-
-    /*
-        Row 2
-    */
-    timing_diagnostics_init(tile02);
-    transport_diagnostics_init(tile12);
+    debug_diagnostics_init(tile01);
 }
 
 static void carousel_cb(lv_event_t *event) {
@@ -160,12 +133,7 @@ static void carousel_cb(lv_event_t *event) {
     }
 }
 
-static void btn_print_database_cb(lv_event_t *event) {
-    link_state_database_print_requested = true;
-}
-
-bool take_link_state_database_print_request(void) {
-    bool print_requested = link_state_database_print_requested;
-    link_state_database_print_requested = false;
-    return print_requested;
+static void scroll_animation_cb(lv_event_t *event) {
+    lv_anim_t *animation = lv_event_get_scroll_anim(event);
+    if (animation != NULL) lv_anim_set_time(animation, SCROLL_ANIMATION_TIME_MS);
 }

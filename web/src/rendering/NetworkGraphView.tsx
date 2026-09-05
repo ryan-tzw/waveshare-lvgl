@@ -5,7 +5,7 @@
 
 import { useEffect, useRef } from "react";
 
-import type { NetworkGraph } from "../network/networkGraph";
+import type { NetworkGraph, NetworkGraphNode } from "../network/networkGraph";
 
 type NetworkGraphViewProps = {
     graph: NetworkGraph;
@@ -20,6 +20,14 @@ const minimumCanvasWidth = 600;
 const minimumCanvasHeight = 400;
 const horizontalNodeSpacing = 190;
 const verticalNodeSpacing = 100;
+
+function getDeviceLabel(node: NetworkGraphNode) {
+    if (node.deviceType === "switch" && node.switchOn !== null) {
+        return `switch: ${node.switchOn ? "on" : "off"}`;
+    }
+
+    return node.deviceType;
+}
 
 function createNodePositions(graph: NetworkGraph, canvasWidth: number, canvasHeight: number) {
     const positions = new Map<string, Point>();
@@ -114,9 +122,10 @@ export function NetworkGraphView({ graph }: NetworkGraphViewProps) {
                 continue;
             }
 
+            const deviceLabel = getDeviceLabel(node);
             const labelWidth = Math.max(
                 context.measureText(node.nodeId).width,
-                context.measureText(node.deviceType).width,
+                context.measureText(deviceLabel).width,
             );
             const nodeWidth = labelWidth + horizontalPadding * 2;
             const left = position.x - nodeWidth / 2;
@@ -136,7 +145,7 @@ export function NetworkGraphView({ graph }: NetworkGraphViewProps) {
 
             context.fillStyle = textColor;
             context.fillText(node.nodeId, position.x, position.y - 9);
-            context.fillText(node.deviceType, position.x, position.y + 10);
+            context.fillText(deviceLabel, position.x, position.y + 10);
         }
     }, [canvasHeight, canvasWidth, graph]);
 

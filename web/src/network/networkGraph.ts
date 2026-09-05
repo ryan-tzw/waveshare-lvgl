@@ -13,6 +13,7 @@ export type NetworkGraphNode = {
     nodeId: string;
     isGateway: boolean;
     deviceType: NetworkDeviceType;
+    switchOn: boolean | null;
 };
 
 export type NetworkGraphLink = {
@@ -67,23 +68,39 @@ function createLinkKey(link: NetworkGraphLink) {
     return `${link.nodeA}:${link.portA}-${link.nodeB}:${link.portB}`;
 }
 
-function getDeviceType(
+function getDeviceDetails(
     nodeId: string,
     deviceStates: Map<string, NetworkPacket>,
-): NetworkDeviceType {
+): Pick<NetworkGraphNode, "deviceType" | "switchOn"> {
     const packet = deviceStates.get(nodeId);
 
     if (packet?.payload.case !== "routedMessage") {
-        return "unknown";
+        return {
+            deviceType: "unknown",
+            switchOn: null,
+        };
     }
 
     const deviceState = packet.payload.value.deviceState;
 
     if (deviceState === undefined) {
-        return "unknown";
+        return {
+            deviceType: "unknown",
+            switchOn: null,
+        };
     }
 
-    return deviceState.state.case ?? "unselected";
+    if (deviceState.state.case === "switch") {
+        return {
+            deviceType: "switch",
+            switchOn: deviceState.state.value.on,
+        };
+    }
+
+    return {
+        deviceType: deviceState.state.case ?? "unselected",
+        switchOn: null,
+    };
 }
 
 export function deriveNetworkGraph(
@@ -103,7 +120,7 @@ export function deriveNetworkGraph(
         {
             nodeId: gatewayNodeId,
             isGateway: true,
-            deviceType: getDeviceType(gatewayNodeId, deviceStates),
+            ...getDeviceDetails(gatewayNodeId, deviceStates),
         },
     ];
     const links: NetworkGraphLink[] = [];
@@ -144,7 +161,7 @@ export function deriveNetworkGraph(
                 nodes.push({
                     nodeId: neighborNodeId,
                     isGateway: false,
-                    deviceType: getDeviceType(neighborNodeId, deviceStates),
+                    ...getDeviceDetails(neighborNodeId, deviceStates),
                 });
             }
 

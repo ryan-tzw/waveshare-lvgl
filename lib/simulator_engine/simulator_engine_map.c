@@ -13,7 +13,7 @@ static khash_t(simulator_engine_map) * simulator_engines;
 void init_simulator_engine_map() {
   simulator_engines = kh_init(simulator_engine_map);
   kh_resize(simulator_engine_map, simulator_engines,
-            INITIAL_CAPACITY); // Prevents resizing
+            INITIAL_CAPACITY); // High enough prevents resizing
 }
 
 void put_into_simulator_engine_map(key_t key,
@@ -23,7 +23,7 @@ void put_into_simulator_engine_map(key_t key,
   if (ret >= 0) {
     kh_value(simulator_engines, k) = simulator_engine;
   } else {
-    panic("put_into_simulator_engine_map: Cannot insert self into map");
+    panic("put_into_simulator_engine_map: Cannot insert into map");
   }
 
   size_t size = kh_size(simulator_engines);

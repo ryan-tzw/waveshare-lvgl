@@ -4,7 +4,9 @@
 #include "logging.h"
 #include "pico/unique_id.h"
 #include "protocol.pb.h"
+#include "simulator_engine_heap.h"
 #include "simulator_engine_map.h"
+#include "simulator_engine_t.h"
 #include "socket.h"
 #include <pico/types.h>
 
@@ -52,31 +54,6 @@ static void core1_main(void *arg) {
   core1_task_queue_post(core1_main, NULL);
 }
 
-void put_simulator_engine(key_t key, SIMULATOR_ENGINE *simulator_engine) {
-#define MAX_SIMULATOR_ENGINES 64
-  static SIMULATOR_ENGINE simulator_engine_heap[MAX_SIMULATOR_ENGINES];
-  static size_t simulator_engine_next = 0;
-  static bool simulator_engine_present[MAX_SIMULATOR_ENGINES] = {false};
-
-  for (size_t i = 0; i < MAX_SIMULATOR_ENGINES; i++) {
-    // malloc using our own heap
-    if (simulator_engine_present[simulator_engine_next]) {
-      simulator_engine_next =
-          (simulator_engine_next + 1) % MAX_SIMULATOR_ENGINES;
-      continue;
-    }
-
-    // Copy into heap and store reference into map
-    simulator_engine_heap[simulator_engine_next] = *simulator_engine;
-    put_into_simulator_engine_map(
-        key, &simulator_engine_heap[simulator_engine_next]);
-
-    // Mark as not free
-    simulator_engine_present[simulator_engine_next] = true;
-  }
-  panic("insert_simulator_engine: Ran out of space");
-}
-
 void init_simulator_engine(void) {
   // Get ID
   pico_unique_board_id_t id;
@@ -88,8 +65,9 @@ void init_simulator_engine(void) {
 
   // Hash table (Adjacency array) of all simulator engines
   init_simulator_engine_map();
-  SIMULATOR_ENGINE self = {.id = uint64_id};
-  put_simulator_engine(self.id, &self);
+  self_ptr = malloc_simulator_engine();
+  *self_ptr = (struct SIMULATOR_ENGINE){.id = uint64_id};
+  put_into_simulator_engine_map(uint64_id, self_ptr);
 
   // Initialize sockets
   int pin_mappings[DIRECTLY_CONNECTED_SIMULATOR_ENGINES_MAX][2] = {

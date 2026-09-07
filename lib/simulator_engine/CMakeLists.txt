@@ -1,5 +1,5 @@
 add_library(simulator_engine)
-target_sources(simulator_engine PRIVATE simulator_engine.c)
+target_sources(simulator_engine PRIVATE simulator_engine.c simulator_engine_map.c simulator_engine_heap.c)
 target_link_libraries(simulator_engine PUBLIC
         socket
 )
